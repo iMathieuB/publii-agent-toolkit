@@ -119,15 +119,36 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 
 `publii-agent ops` returns this catalogue as JSON, which is the version to trust.
 
+## Publishing without the click
+
+Publii has no CLI. Rendering and syncing are interface actions, which leaves a human pressing a button in the middle of an otherwise scriptable pipeline. The `desktop` module drives the application itself, on Windows.
+
+```bash
+pip install "publii-agent-toolkit[desktop]"
+
+publii-agent desktop-status
+publii-agent desktop-sync --name my-site                     # dry run
+publii-agent desktop-sync --name my-site --name my-site-en --apply
+```
+
+Two things make this reliable rather than a pile of coordinates.
+
+Publii is an Electron application, and Chromium only builds its accessibility tree when something asks for it. Launched normally, Publii exposes nine empty panes to Windows UI Automation and not one button. Launched with `--force-renderer-accessibility` it exposes the whole interface by name. That is why the driver always launches Publii itself instead of attaching to a window that may have started without the flag, and why it refuses to run while Publii is already open.
+
+Success comes from disk, not from the click. Publii writes `syncDate` into `input/config/site.config.json` when a sync completes, so the driver reads that value before and after and only reports success when it changes. A click that silently fails is detected instead of assumed to have worked — which matters, because the sidebar link and the confirmation modal's button carry the *identical* label, "Sync your website", separated only by control type. Clicking the wrong one reopens the modal and publishes nothing.
+
+A sync publishes to the live site, and the backups this toolkit takes protect `input/` — they do not undo a publication. So `--apply` is required, any element labelled "delete" is refused outright (the site list puts a "Delete website" link beside every entry), and the selected site is re-checked immediately before publishing.
+
 ## Layers
 
 Use whichever fits. Each one is usable on its own.
 
 ```
-agent       JSON commands, plan and apply       for a model, or a shell script
-sync        compare two sites, propagate        for keeping a translated copy aligned
-repository  reads, and PubliiTransaction        for anything the command set omits
-models      pydantic schemas                    for validating a row or a config blob
+desktop     render and publish through the app   for the step Publii offers no API for
+agent       JSON commands, plan and apply        for a model, or a shell script
+sync        compare two sites, propagate         for keeping a translated copy aligned
+repository  reads, and PubliiTransaction         for anything the command set omits
+models      pydantic schemas                     for validating a row or a config blob
 ```
 
 `models` is worth a look even if you write your own tooling. The schemas were verified against live Publii sites, and they encode facts the Publii documentation does not state: a row in `posts` is a page when its `status` contains `is-page`; `posts_additional_data` is an entity-attribute-value table whose `_core` key holds a JSON blob of SEO fields; `mainTag` is stored sometimes as a string and sometimes as an integer, so both must round-trip. Post models use `extra="forbid"`, so a Publii upgrade that adds a column raises on read instead of being silently dropped. Config models use `extra="allow"`, so keys the toolkit does not model survive a read-modify-write untouched.

@@ -43,7 +43,63 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("check", help="Run the integrity check and report.")
 
+    p_status = sub.add_parser(
+        "desktop-status", help="List local Publii sites and when each was last synced."
+    )
+    p_status.add_argument("--sites-root", help="Folder holding the Publii site directories.")
+
+    p_sync = sub.add_parser(
+        "desktop-sync",
+        help="Render and publish sites by driving the Publii desktop app (Windows only).",
+    )
+    p_sync.add_argument("--sites-root", help="Folder holding the Publii site directories.")
+    p_sync.add_argument("--name", action="append", default=[], required=True,
+                        help="Site directory name; repeat for several, published in order.")
+    p_sync.add_argument("--apply", action="store_true",
+                        help="Actually publish. Without it this is a dry run.")
+    p_sync.add_argument("--keep-open", action="store_true",
+                        help="Leave Publii running afterwards; it then blocks database writes.")
+
     return parser
+
+
+def _desktop(args) -> int:
+    """The desktop driver is optional and Windows only; import it lazily."""
+    try:
+        from .desktop import DesktopError, PubliiDesktop
+    except ImportError as exc:  # pragma: no cover - depends on the extra
+        return _emit({"ok": False, "error": {
+            "code": "desktop_unavailable",
+            "detail": f'Install the extra: pip install "publii-agent-toolkit[desktop]" ({exc})',
+        }})
+
+    try:
+        driver = PubliiDesktop(sites_root=args.sites_root)
+        if args.command == "desktop-status":
+            return _emit({"ok": True, "result": {
+                "publii_running": driver.is_running(),
+                "sites": [
+                    {"directory": s.directory, "display_name": s.display_name,
+                     "last_sync": s.last_sync}
+                    for s in driver.sites()
+                ],
+            }})
+
+        results = driver.sync(args.name, apply=args.apply, keep_open=args.keep_open)
+        return _emit({
+            "ok": all(r.succeeded for r in results) if args.apply else True,
+            "result": {
+                "applied": args.apply,
+                "sites": [
+                    {"site": r.site, "succeeded": r.succeeded,
+                     "previous_sync_ms": r.previous_sync_ms,
+                     "new_sync_ms": r.new_sync_ms, "detail": r.detail}
+                    for r in results
+                ],
+            },
+        })
+    except DesktopError as exc:
+        return _emit({"ok": False, "error": {"code": "desktop_error", "detail": str(exc)}})
 
 
 def _payload(raw: str | None) -> object:
@@ -69,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ops":
         return _emit({"ok": True, "result": describe_operations()})
+
+    if args.command in ("desktop-status", "desktop-sync"):
+        return _desktop(args)
 
     if not args.site:
         return _emit(

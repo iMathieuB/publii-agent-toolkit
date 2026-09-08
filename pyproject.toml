@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "publii-agent-toolkit"
-version = "1.0.0"
+version = "1.1.0"
 description = "Read and edit a Publii CMS site from code, safely enough to hand to an AI agent."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,9 @@ dependencies = ["pydantic>=2.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4"]
+# Driving the Publii desktop application. Windows only, so it stays optional:
+# the core toolkit keeps pydantic as its single runtime dependency.
+desktop = ["pywinauto>=0.6.8; sys_platform == 'win32'"]
 
 [project.scripts]
 publii-agent = "publii_toolkit.cli:main"

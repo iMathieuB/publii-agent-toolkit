@@ -29,23 +29,29 @@ from .repository import (
     PubliiTransaction,
 )
 
-__version__ = "1.0.0"
+from .desktop import DesktopError, PubliiDesktop, SiteState, SyncResult
+
+__version__ = "1.1.0"
 
 __all__ = [
     "AgentSession",
     "Command",
     "CommandError",
     "CoreMeta",
+    "DesktopError",
     "IntegrityIssue",
     "Menu",
     "MenuItem",
     "Post",
     "PostAdditionalData",
+    "PubliiDesktop",
     "PubliiIntegrityError",
     "PubliiLockedError",
     "PubliiRepository",
     "PubliiTransaction",
     "SitePaths",
+    "SiteState",
+    "SyncResult",
     "Tag",
     "describe_operations",
     "__version__",
