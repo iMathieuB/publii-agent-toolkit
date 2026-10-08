@@ -399,8 +399,15 @@ class PubliiTransaction:
     # -- safety primitives --------------------------------------------------- #
     def _backup_input(self) -> Path:
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        backup_root = self.paths.input_dir.parent / "input_backup" / ts
-        backup_root.mkdir(parents=True, exist_ok=True)
+        parent = self.paths.input_dir.parent / "input_backup"
+        backup_root = parent / ts
+        # Two transactions in the same second used to share one folder, and the
+        # second backup overwrote the first. Never reuse a folder.
+        n = 2
+        while backup_root.exists():
+            backup_root = parent / f"{ts}-{n}"
+            n += 1
+        backup_root.mkdir(parents=True)
         shutil.copy2(self.paths.db_path, backup_root / "db.sqlite")
         if self.paths.config_dir.is_dir():
             shutil.copytree(self.paths.config_dir, backup_root / "config", dirs_exist_ok=True)
@@ -679,6 +686,27 @@ class PubliiTransaction:
         self._stage_json(self.paths.config_dir / MENU_CONFIG, menus)
         self.log.info("Staged menu removal of id %s from '%s'", item_id, position)
 
+    def update_menu_item(self, position: str, item_id: int, **fields: Any) -> None:
+        """Change fields of one menu item in place, its label for instance.
+
+        The item keeps its position. Removing it and injecting a copy would move
+        it to the end of its level, which is why renaming needs its own method.
+        """
+        refused = sorted((set(fields) & {"id", "items"}) | (set(fields) - set(MenuItem.model_fields)))
+        if refused:
+            raise ValueError(f"Cannot update menu item field(s) {refused}")
+        menus = self._current_json(self.paths.config_dir / MENU_CONFIG, default=[])
+        target_menu = next((m for m in menus if m.get("position") == position), None)
+        if target_menu is None:
+            raise ValueError(f"Menu position '{position}' not found")
+        item = _find_by_id(target_menu.get("items", []), item_id)
+        if item is None:
+            raise ValueError(f"Menu item id {item_id} not found in '{position}'")
+        item.update(fields)
+        MenuItem.model_validate(item)
+        self._stage_json(self.paths.config_dir / MENU_CONFIG, menus)
+        self.log.info("Staged menu update of id %s in '%s': %s", item_id, position, sorted(fields))
+
 
 def _attach_to_parent(items: list[dict], parent_id: int, new_item: dict) -> bool:
     for it in items:
@@ -688,6 +716,16 @@ def _attach_to_parent(items: list[dict], parent_id: int, new_item: dict) -> bool
         if _attach_to_parent(it.get("items", []), parent_id, new_item):
             return True
     return False
+
+
+def _find_by_id(items: list[dict], item_id: int) -> dict | None:
+    for it in items:
+        if it.get("id") == item_id:
+            return it
+        found = _find_by_id(it.get("items", []), item_id)
+        if found is not None:
+            return found
+    return None
 
 
 def _remove_by_id(items: list[dict], item_id: int) -> bool:

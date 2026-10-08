@@ -229,6 +229,30 @@ def _op_remove_menu_item(repo: PubliiRepository, tx, args: dict) -> Any:
     return {"position": args["position"], "removed": args["id"]}
 
 
+def _op_update_menu_item(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Rename a menu entry in place, keeping its position. args: position, id, label?, title?."""
+    _check_menu_update(args)
+    fields = {k: args[k] for k in MENU_UPDATE_FIELDS if k in args}
+    tx.update_menu_item(args["position"], int(args["id"]), **fields)
+    return {"position": args["position"], "id": args["id"], **fields}
+
+
+# Fields an agent may change on an existing menu entry. Its target (type, link)
+# is left out on purpose: pointing an entry elsewhere is a remove and an add.
+MENU_UPDATE_FIELDS = ("label", "title")
+
+
+def _check_menu_update(args: dict) -> None:
+    for required in ("position", "id"):
+        if required not in args:
+            raise CommandError(f"update_menu_item needs {required!r}.")
+    if not any(k in args for k in MENU_UPDATE_FIELDS):
+        raise CommandError(f"update_menu_item needs at least one of {list(MENU_UPDATE_FIELDS)}.")
+    extra = sorted(set(args) - {"position", "id", *MENU_UPDATE_FIELDS})
+    if extra:
+        raise CommandError(f"update_menu_item cannot change {extra}.")
+
+
 READ_OPS: dict[str, Callable] = {
     "list_posts": _op_list_posts,
     "get_post": _op_get_post,
@@ -243,6 +267,7 @@ WRITE_OPS: dict[str, Callable] = {
     "set_tags": _op_set_tags,
     "add_menu_item": _op_add_menu_item,
     "remove_menu_item": _op_remove_menu_item,
+    "update_menu_item": _op_update_menu_item,
 }
 
 OPERATIONS = {**READ_OPS, **WRITE_OPS}
@@ -386,6 +411,19 @@ def _describe_or_raise(repo: PubliiRepository, cmd: Command) -> str:
             if required not in cmd.args:
                 raise CommandError(f"remove_menu_item needs {required!r}.")
         return f"remove item {cmd.args['id']} from menu {cmd.args['position']!r}"
+
+    if cmd.op == "update_menu_item":
+        _check_menu_update(cmd.args)
+        menu = next((m for m in repo.read_menus() if m.position == cmd.args["position"]), None)
+        if menu is None:
+            raise CommandError(f"No menu at position {cmd.args['position']!r}.")
+        item = next((i for i in _flatten(menu.items) if i.id == int(cmd.args["id"])), None)
+        if item is None:
+            raise CommandError(f"No item {cmd.args['id']} in menu {cmd.args['position']!r}.")
+        changes = ", ".join(
+            f"{k} {getattr(item, k)!r} -> {cmd.args[k]!r}" for k in MENU_UPDATE_FIELDS if k in cmd.args
+        )
+        return f"update item {cmd.args['id']} in menu {cmd.args['position']!r}: {changes}"
 
     return cmd.op
 
