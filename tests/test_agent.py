@@ -191,6 +191,33 @@ def test_a_backup_is_written_before_any_change(site_root):
     assert title == "About", "the backup must hold the pre-change state"
 
 
+def test_two_changes_in_the_same_second_keep_two_backups(site_root, monkeypatch):
+    # The folder name has one-second resolution. Two back-to-back passes used to
+    # share it, and the second backup silently replaced the first.
+    from datetime import datetime as real_datetime
+
+    import publii_toolkit.repository as repository
+
+    class FrozenClock:
+        @staticmethod
+        def now(tz=None):
+            return real_datetime(2026, 10, 8, 13, 0, 9, tzinfo=tz)
+
+    monkeypatch.setattr(repository, "datetime", FrozenClock)
+    session = AgentSession(str(site_root))
+    session.apply([{"op": "update_post", "slug": "about", "title": "About us"}])
+    session.apply([{"op": "update_post", "slug": "about", "title": "About the team"}])
+
+    backups = sorted((site_root / "input_backup").glob("*/db.sqlite"))
+    assert len(backups) == 2, "each change must keep its own backup"
+    titles = []
+    for path in backups:
+        conn = sqlite3.connect(path)
+        titles.append(conn.execute("SELECT title FROM posts WHERE id=2").fetchone()[0])
+        conn.close()
+    assert sorted(titles) == ["About", "About us"]
+
+
 def test_menu_items_can_be_added_and_removed(site_root):
     session = AgentSession(str(site_root))
 
@@ -210,6 +237,36 @@ def test_menu_items_can_be_added_and_removed(site_root):
 
     menus = AgentSession(str(site_root)).read({"op": "list_menus"})["result"]
     assert not any(i["label"] == "Blog" for i in menus[0]["items"])
+
+
+def test_a_menu_item_is_renamed_in_place(site_root):
+    # Remove-then-add would move the entry to the end of its level; a rename must not.
+    session = AgentSession(str(site_root))
+    before = session.read({"op": "list_menus"})["result"][0]["items"]
+
+    preview = session.plan([{"op": "update_menu_item", "position": "mainMenu", "id": 3, "label": "About us"}])
+    assert preview["ok"], preview
+    assert "'About' -> 'About us'" in preview["result"]["steps"][0]["describes"]
+
+    out = session.apply([{"op": "update_menu_item", "position": "mainMenu", "id": 3, "label": "About us"}])
+    assert out["ok"], out
+
+    after = AgentSession(str(site_root)).read({"op": "list_menus"})["result"][0]["items"]
+    assert [i["id"] for i in after] == [i["id"] for i in before]
+    nested = after[1]["items"][0]
+    assert (nested["id"], nested["label"], nested["link"]) == (3, "About us", 2)
+
+
+def test_a_menu_rename_cannot_retarget_the_entry(site_root):
+    session = AgentSession(str(site_root))
+    for bad in (
+        {"op": "update_menu_item", "position": "mainMenu", "id": 3, "link": 1},
+        {"op": "update_menu_item", "position": "mainMenu", "id": 3},
+        {"op": "update_menu_item", "position": "mainMenu", "id": 99, "label": "Ghost"},
+    ):
+        assert not session.plan([bad])["ok"], bad
+    menus = AgentSession(str(site_root)).read({"op": "list_menus"})["result"][0]["items"]
+    assert menus[1]["items"][0]["label"] == "About"
 
 
 def test_tags_can_be_replaced_by_slug(site_root):

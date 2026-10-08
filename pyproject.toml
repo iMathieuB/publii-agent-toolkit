@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "publii-agent-toolkit"
-version = "1.1.0"
+version = "1.2.0"
 description = "Read and edit a Publii CMS site from code, safely enough to hand to an AI agent."
 readme = "README.md"
 requires-python = ">=3.10"

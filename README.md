@@ -16,7 +16,7 @@ The guarantees do not depend on the agent behaving well:
 
 **Writes take the database lock first.** If Publii has the site open, the run fails immediately with `site_locked` rather than fighting over the file.
 
-**The whole mutable surface is backed up before any change**, to `input_backup/<timestamp>/`. Database and config together, because restoring one without the other leaves them out of step.
+**The whole mutable surface is backed up before any change**, to `input_backup/<timestamp>/`. Database and config together, because restoring one without the other leaves them out of step. Two changes within the same second get two folders (`<timestamp>-2`), never one overwritten.
 
 **Everything happens in one transaction.** Database changes commit or roll back as a unit, and the config files are swapped atomically with `os.replace` only after the commit succeeds.
 
@@ -28,8 +28,10 @@ The worst outcome of a confused agent is a refused command and a log line.
 
 ## Install
 
+The package is not on PyPI. Install it from GitHub:
+
 ```bash
-pip install publii-agent-toolkit
+pip install "git+https://github.com/iMathieuB/publii-agent-toolkit.git"
 ```
 
 Python 3.10 or newer. The only dependency is pydantic.
@@ -116,6 +118,7 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 | `set_tags` | write | `slug`\|`id`, `tags` (list of tag slugs) |
 | `add_menu_item` | write | `position`, `label`, `link`, `type`, `parent_id` |
 | `remove_menu_item` | write | `position`, `id` |
+| `update_menu_item` | write | `position`, `id`, and one or both of `label`, `title`; the entry keeps its place and its target |
 
 `publii-agent ops` returns this catalogue as JSON, which is the version to trust.
 
@@ -124,7 +127,7 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 Publii has no CLI. Rendering and syncing are interface actions, which leaves a human pressing a button in the middle of an otherwise scriptable pipeline. The `desktop` module drives the application itself, on Windows.
 
 ```bash
-pip install "publii-agent-toolkit[desktop]"
+pip install "publii-agent-toolkit[desktop] @ git+https://github.com/iMathieuB/publii-agent-toolkit.git"
 
 publii-agent desktop-status
 publii-agent desktop-sync --name my-site                     # dry run

@@ -37,7 +37,9 @@ publii-agent ops
 
 Reads, available immediately: `list_posts`, `get_post`, `list_tags`, `list_menus`, `check`.
 
-Writes, through plan and apply: `update_post`, `update_meta`, `set_tags`, `add_menu_item`, `remove_menu_item`.
+Writes, through plan and apply: `update_post`, `update_meta`, `set_tags`, `add_menu_item`, `remove_menu_item`, `update_menu_item`.
+
+To rename a menu entry, use `update_menu_item`, not a remove and an add: the add puts the entry at the end of its level and reorders the menu.
 
 ## A worked example
 
