@@ -19,6 +19,22 @@ Success is never inferred from the click. Publii writes ``syncDate`` into
 ``input/config/site.config.json`` when a sync completes, so this module reads
 that value before and after and only reports success when it changes.
 
+Sites that share a display name
+-------------------------------
+Nothing stops two Publii projects from carrying the same display name, and it
+is the normal case for a bilingual site whose brand does not translate: the
+French and English projects are both called "Net Zero Technologies". The site
+list shows nothing but that name, so selecting by name alone is ambiguous - it
+would publish whichever of the two comes first, look like it succeeded, and
+leave the other behind.
+
+This module therefore treats same-named projects as a group. It requires every
+project sharing a name to be requested in the same call, walks the list entries
+by position, and only works out which directory sat behind which position
+afterwards, by reading which ``syncDate`` actually moved. No assumption is made
+about the order Publii displays them in: the disk decides what was published,
+as it does everywhere else in this module.
+
 Safety
 ------
 A sync publishes to the live site. The transaction backups taken elsewhere in
@@ -49,6 +65,11 @@ from pathlib import Path
 ACCESSIBILITY_FLAG = "--force-renderer-accessibility"
 SYNC_LINK_TEXT = "Sync your website"
 SYNC_MODAL_TITLE = "Website synchronisation"
+SYNC_DONE_TEXTS = (
+    "Your website is now in sync",
+    "All files have been successfully uploaded to your server.",
+)
+MODAL_ACK_TEXT = "OK"
 FORBIDDEN_CLICK_TEXTS = ("delete", "supprimer")
 
 TREE_READY_MIN_ELEMENTS = 40
@@ -158,8 +179,23 @@ class PubliiDesktop:
                     continue
         return found
 
+    def directories_by_display_name(self) -> dict[str, list[str]]:
+        """Display name -> every directory carrying it, sorted.
+
+        A list, not a single directory: two projects may share a display name,
+        and that is precisely the case that makes selection ambiguous.
+        """
+        groups: dict[str, list[str]] = {}
+        for state in self.sites():
+            groups.setdefault(state.display_name, []).append(state.directory)
+        for directories in groups.values():
+            directories.sort()
+        return groups
+
     def display_names(self) -> dict[str, str]:
-        return {state.display_name: state.directory for state in self.sites()}
+        """Display name -> one directory. Only used to test whether a name is known."""
+        return {name: directories[0]
+                for name, directories in self.directories_by_display_name().items()}
 
     # ── Application lifecycle ─────────────────────────────────────
 
@@ -222,7 +258,9 @@ class PubliiDesktop:
             return ""
 
     @classmethod
-    def _find(cls, children, text: str, control_types=None, exact: bool = False):
+    def _find_all(cls, children, text: str, control_types=None, exact: bool = False):
+        """Every match, in the order Windows exposes the tree."""
+        found = []
         for element in children:
             value = cls._text(element)
             if not value:
@@ -234,8 +272,13 @@ class PubliiDesktop:
                             continue
                     except Exception:
                         continue
-                return element
-        return None
+                found.append(element)
+        return found
+
+    @classmethod
+    def _find(cls, children, text: str, control_types=None, exact: bool = False):
+        matches = cls._find_all(children, text, control_types, exact)
+        return matches[0] if matches else None
 
     @classmethod
     def _safe_click(cls, element, expected_text: str) -> None:
@@ -261,12 +304,20 @@ class PubliiDesktop:
                 return text
         return None
 
-    def _select_site(self, window, display_name: str) -> None:
+    def _select_site(self, window, display_name: str, occurrence: int = 0,
+                     expected_matches: int = 1) -> None:
+        """Open the site called `display_name`, the `occurrence`-th of that name.
+
+        The "already selected" shortcut only holds for a unique name. Once a
+        name is carried by several projects it proves nothing, so the list has
+        to be reopened and the requested position clicked even when the header
+        already shows that name.
+        """
         window.set_focus()
         time.sleep(1)
 
         current = self._current_site_display(window)
-        if current == display_name:
+        if expected_matches == 1 and current == display_name:
             return
         if current is None:
             raise DesktopError("Could not read which site Publii currently has open.")
@@ -277,10 +328,18 @@ class PubliiDesktop:
         header.click_input()
         time.sleep(2.5)
 
-        entry = self._find(window.descendants(), display_name, control_types=("ListItem",))
-        if entry is None:
+        entries = self._find_all(window.descendants(), display_name,
+                                 control_types=("ListItem",))
+        if not entries:
             raise DesktopError(f"Site {display_name!r} is not in the Publii list.")
-        self._safe_click(entry, display_name)
+        if len(entries) != expected_matches:
+            raise DesktopError(
+                f"{len(entries)} entries carry {display_name!r} in the Publii list, "
+                f"{expected_matches} expected from disk. Selection abandoned: "
+                f"clicking at random would publish the wrong project."
+            )
+
+        self._safe_click(entries[occurrence], display_name)
         time.sleep(4)
 
         if self._current_site_display(window) != display_name:
@@ -315,6 +374,38 @@ class PubliiDesktop:
                 return
         raise DesktopError(f"The {SYNC_MODAL_TITLE!r} modal never appeared.")
 
+    def _dismiss_sync_modal(self, window, timeout_s: int = 30) -> bool:
+        """Close the "Your website is now in sync" modal.
+
+        This modal covers the whole interface: while it is up, neither the site
+        switcher nor the "Sync your website" link exists in the accessibility
+        tree. Without this click the module can publish only one project per
+        launch - the second fails with "site is not in the Publii list", which
+        looks like a selection problem and is not one.
+
+        Two conditions before clicking, because "OK" is too ordinary a label to
+        trust on its own: either one of the known success-modal strings is
+        present, or the sidebar sync link has vanished from the tree, which is
+        proof that a modal is covering the interface. Otherwise nothing is
+        clicked and the next step is left to fail loudly.
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            children = window.descendants()
+            ack = self._find(children, MODAL_ACK_TEXT,
+                             control_types=("Text", "Button"), exact=True)
+            if ack is not None:
+                known = any(self._find(children, text, control_types=("Text",), exact=True)
+                            for text in SYNC_DONE_TEXTS)
+                covered = self._find(children, SYNC_LINK_TEXT,
+                                     control_types=("Hyperlink",), exact=True) is None
+                if known or covered:
+                    self._safe_click(ack, MODAL_ACK_TEXT)
+                    time.sleep(2)
+                    return True
+            time.sleep(1.5)
+        return False
+
     def _wait_for_sync(self, site: str, previous: int | None,
                        timeout_s: int = SYNC_TIMEOUT_S) -> int | None:
         deadline = time.time() + timeout_s
@@ -325,18 +416,118 @@ class PubliiDesktop:
             time.sleep(3)
         return None
 
+    def _wait_for_any_sync(self, directories: list[str], before: dict,
+                           timeout_s: int = SYNC_TIMEOUT_S):
+        """Wait for one syncDate in the group to move, and say which one.
+
+        This is what replaces any assumption about Publii's display order: the
+        project behind a list position is not guessed, it is read off the disk
+        once the publication has happened.
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            for directory in directories:
+                current = self.state(directory).sync_date_ms
+                if current and current != before.get(directory):
+                    return directory, current
+            time.sleep(3)
+        return None, None
+
     # ── Public operation ──────────────────────────────────────────
+
+    def plan(self, sites: list[str]) -> list[tuple[str, list[str]]]:
+        """Group the requested projects by display name, in the requested order.
+
+        A same-named group is done whole or not at all: syncing one of two
+        identically named projects would mean clicking one of two identical
+        entries with no way to tell which, and so possibly publishing the other
+        one without being asked to. The module refuses rather than gamble.
+        """
+        groups = self.directories_by_display_name()
+        display_of = {directory: name
+                      for name, directories in groups.items()
+                      for directory in directories}
+
+        ordered: list[tuple[str, list[str]]] = []
+        seen: set[str] = set()
+        for site in sites:
+            if site in seen:
+                continue
+            name = display_of.get(site)
+            if name is None:
+                raise DesktopError(f"No such Publii project: {site}")
+            siblings = groups[name]
+            if len(siblings) > 1:
+                missing = [s for s in siblings if s not in sites]
+                if missing:
+                    raise DesktopError(
+                        f"{name!r} is carried by {len(siblings)} projects "
+                        f"({', '.join(siblings)}). The Publii list shows nothing but "
+                        f"that name, so these projects cannot be told apart at "
+                        f"selection time. Request them all in the same call, or sync "
+                        f"them by hand. Missing: {', '.join(missing)}."
+                    )
+            ordered.append((name, list(siblings)))
+            seen.update(siblings)
+        return ordered
+
+    def _sync_group(self, window, display_name: str,
+                    directories: list[str]) -> list[SyncResult]:
+        """Sync every same-named project; report what each position published.
+
+        The position clicked is never assumed to map to a directory: after each
+        sync the group's syncDate values are read to see which one moved, and
+        that reading is what counts. Publishing the same project twice costs
+        nothing - the content being identical, Publii uploads no file - whereas
+        a guess about display order would cost a project left behind.
+        """
+        total = len(directories)
+        before = {d: self.state(d).sync_date_ms for d in directories}
+        remaining = list(directories)
+        results: list[SyncResult] = []
+        occurrence = 0
+        attempts = 0
+
+        while remaining and attempts < 2 * total:
+            self._select_site(window, display_name, occurrence=occurrence,
+                              expected_matches=total)
+            self._click_sync(window)
+            moved, new = self._wait_for_any_sync(directories, before)
+            self._dismiss_sync_modal(window)
+            attempts += 1
+            occurrence = (occurrence + 1) % total
+
+            if moved is None:
+                break
+            before[moved] = new
+            if moved in remaining:
+                remaining.remove(moved)
+                results.append(SyncResult(
+                    site=moved, applied=True, succeeded=True,
+                    previous_sync_ms=None, new_sync_ms=new,
+                    detail=f"selected at list position {occurrence or total} of {total}",
+                ))
+
+        for directory in remaining:
+            results.append(SyncResult(
+                site=directory, applied=True, succeeded=False,
+                previous_sync_ms=before[directory], new_sync_ms=None,
+                detail=f"syncDate unchanged after {attempts} attempt(s) on "
+                       f"{total} identically named entries",
+            ))
+        return results
 
     def sync(self, sites: list[str], apply: bool = False,
              keep_open: bool = False) -> list[SyncResult]:
         """Render and publish each site in order. Dry run unless apply is True."""
-        states = [self.state(site) for site in sites]
+        grouped = self.plan(sites)
         if not apply:
             return [
-                SyncResult(site=s.directory, applied=False, succeeded=False,
-                           previous_sync_ms=s.sync_date_ms, new_sync_ms=None,
-                           detail="dry run")
-                for s in states
+                SyncResult(site=directory, applied=False, succeeded=False,
+                           previous_sync_ms=self.state(directory).sync_date_ms,
+                           new_sync_ms=None, detail="dry run")
+                for _, directories in grouped
+                for directory in directories
             ]
 
         if self.is_running():
@@ -345,19 +536,28 @@ class PubliiDesktop:
                 f"{ACCESSIBILITY_FLAG}, otherwise no control is addressable."
             )
 
-        self.launch()
-        window = self._find_window()
-        self._wait_for_tree(window)
-
         results = []
         try:
-            for state in states:
-                previous = state.sync_date_ms
-                self._select_site(window, state.display_name)
+            # Launch and tree wait sit inside the try: if Publii starts but never
+            # exposes its controls, it must still be closed, or the database stays
+            # locked and the next run refuses to start.
+            self.launch()
+            window = self._find_window()
+            self._wait_for_tree(window)
+
+            for display_name, directories in grouped:
+                if len(directories) > 1:
+                    results.extend(self._sync_group(window, display_name, directories))
+                    continue
+
+                directory = directories[0]
+                previous = self.state(directory).sync_date_ms
+                self._select_site(window, display_name)
                 self._click_sync(window)
-                new = self._wait_for_sync(state.directory, previous)
+                new = self._wait_for_sync(directory, previous)
+                self._dismiss_sync_modal(window)
                 results.append(SyncResult(
-                    site=state.directory,
+                    site=directory,
                     applied=True,
                     succeeded=new is not None,
                     previous_sync_ms=previous,
