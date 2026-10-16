@@ -624,6 +624,239 @@ def _check_menu_update(args: dict) -> None:
         raise CommandError(f"update_menu_item cannot change {extra}.")
 
 
+# -- update_site_settings ----------------------------------------------------- #
+# A strict whitelist. site.config.json also holds the deployment credentials
+# (S3 keys, FTP passwords, tokens) and dozens of rendering switches; none of
+# that is reachable from here, and nothing read from it is ever echoed back
+# except the whitelisted values themselves.
+#
+# Where each value lives was read from live sites and from Publii 0.47.6:
+#   site_name         site.config.json  displayName (the %sitename in titles)
+#   site_description  site.config.json  advanced.metaDescription (the default
+#                                       meta description, home.js / page.js)
+#   logo              theme.config.json config.logo, "media/website/<file>"
+#                     (site.config.json "logo" is only the icon in Publii's
+#                     own site list, not the logo on the website)
+#   cookie_banner     site.config.json  advanced.gdpr.enabled
+#   privacy_policy_page  advanced.gdpr.privacyPolicyPostId (an integer id),
+#                     with privacyPolicyLinkType "internal" and
+#                     showPrivacyPolicyLink true (render-html/helpers/gdpr.js)
+#   front_page        advanced.usePageAsFrontpage true and
+#                     advanced.pageAsFrontpage (an integer id)
+
+SITE_SETTINGS = ("site_name", "site_description", "logo", "cookie_banner",
+                 "privacy_policy_page", "front_page")
+
+
+def _check_update_site_settings(view, args: dict) -> dict:
+    refused = sorted(set(args) - set(SITE_SETTINGS))
+    if refused:
+        raise CommandError(
+            f"update_site_settings cannot change {refused}. Allowed: {list(SITE_SETTINGS)}. "
+            f"Anything else, deployment credentials included, is set in Publii itself."
+        )
+    if not args:
+        raise CommandError(f"update_site_settings needs at least one of {list(SITE_SETTINGS)}.")
+
+    site: dict[tuple[str, ...], Any] = {}
+    theme: dict[tuple[str, ...], Any] = {}
+    shown: dict[str, Any] = {}
+
+    if "site_name" in args:
+        name = args["site_name"]
+        if not isinstance(name, str) or not name.strip():
+            raise CommandError("site_name must be a non-empty string.")
+        site[("displayName",)] = shown["site_name"] = name.strip()
+
+    if "site_description" in args:
+        desc = args["site_description"]
+        if not isinstance(desc, str):
+            raise CommandError("site_description must be a string.")
+        site[("advanced", "metaDescription")] = shown["site_description"] = desc.strip()
+
+    if "logo" in args:
+        logo = args["logo"]
+        if not isinstance(logo, str):
+            raise CommandError("logo must be a string: the value add_media returned, or '' to remove it.")
+        if logo:
+            prefix = "media/website/"
+            name = logo[len(prefix):] if logo.startswith(prefix) else ""
+            if not name or not MEDIA_NAME_RE.match(name) or ".." in name:
+                raise CommandError(
+                    f"logo must look like 'media/website/<file>', the value add_media returns "
+                    f"for target 'logo'; got {logo!r}."
+                )
+            if not view.media_present(view.input_dir / "media" / "website" / name):
+                raise CommandError(f"No file {logo!r} on the site. Add it first with add_media.")
+        theme[("config", "logo")] = shown["logo"] = logo
+
+    if "cookie_banner" in args:
+        if not isinstance(args["cookie_banner"], bool):
+            raise CommandError("cookie_banner must be true or false.")
+        site[("advanced", "gdpr", "enabled")] = shown["cookie_banner"] = args["cookie_banner"]
+
+    refs: dict[str, PostRef] = {}
+    for key in ("privacy_policy_page", "front_page"):
+        if key not in args:
+            continue
+        value = args[key]
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise CommandError(f"{key} must be a page slug or a page id.")
+        ref = view.post({"id": value} if isinstance(value, int) else {"slug": value})
+        if not ref.is_page:
+            raise CommandError(f"{key}: {ref.slug!r} is a post, not a page.")
+        refs[key] = ref
+        shown[key] = ref.slug
+
+    return {"site": site, "theme": theme, "refs": refs, "shown": shown}
+
+
+def _op_update_site_settings(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Change whitelisted site settings only. args, one or more of: site_name, site_description (default meta description), logo (value returned by add_media target 'logo', or ''), cookie_banner (true/false, Publii's GDPR banner), privacy_policy_page (page slug or id the banner links to), front_page (page slug or id served at the site root). Any other key is refused."""
+    spec = _check_update_site_settings(_ApplyView(repo, tx), args)
+    site = dict(spec["site"])
+    refs = spec["refs"]
+    if "privacy_policy_page" in refs:
+        site[("advanced", "gdpr", "privacyPolicyPostId")] = refs["privacy_policy_page"].id
+        site[("advanced", "gdpr", "privacyPolicyLinkType")] = "internal"
+        site[("advanced", "gdpr", "showPrivacyPolicyLink")] = True
+    if "front_page" in refs:
+        site[("advanced", "usePageAsFrontpage")] = True
+        site[("advanced", "pageAsFrontpage")] = refs["front_page"].id
+    if site:
+        tx.set_config_values(SITE_CONFIG, site)
+    if spec["theme"]:
+        tx.set_config_values(THEME_CONFIG, spec["theme"])
+    return {"updated": spec["shown"]}
+
+
+# -- add_media ---------------------------------------------------------------- #
+
+ADD_MEDIA_ARGS = {"file", "target", "slug", "id", "name", "featured", "alt"}
+
+
+def _check_add_media(view, args: dict) -> dict:
+    extra = sorted(set(args) - ADD_MEDIA_ARGS)
+    if extra:
+        raise CommandError(f"add_media does not take {extra}. Allowed: {sorted(ADD_MEDIA_ARGS)}.")
+    if not isinstance(args.get("file"), str) or not args["file"].strip():
+        raise CommandError("add_media needs 'file', the path of a local image.")
+    target = args.get("target")
+    if target not in ("logo", "post"):
+        raise CommandError("add_media needs 'target': 'logo' (the site logo) or 'post' (a page or post).")
+
+    source = Path(args["file"]).expanduser()
+    if not source.is_file():
+        raise CommandError(f"No file at {source}.")
+    source = source.resolve()
+    size = source.stat().st_size
+    if size == 0 or size > MAX_MEDIA_BYTES:
+        raise CommandError(f"{source.name} is {size} bytes; images must be 1 byte to "
+                           f"{MAX_MEDIA_BYTES // (1024 * 1024)} MB.")
+    _check_image(source)
+
+    name = _media_name(args.get("name", source.name))
+    if _ext_kind(Path(name).suffix) != _ext_kind(source.suffix):
+        raise CommandError(f"name {name!r} must keep the file's extension ({source.suffix}).")
+
+    featured = args.get("featured", False)
+    alt = args.get("alt", "")
+    if not isinstance(featured, bool) or not isinstance(alt, str):
+        raise CommandError("featured must be true or false, and alt a string.")
+
+    post: PostRef | None = None
+    if target == "logo":
+        if featured or "slug" in args or "id" in args:
+            raise CommandError("target 'logo' takes no slug, id or featured.")
+        folder = view.media_dir / "website"
+        value = f"media/website/{name}"
+    else:
+        if "slug" not in args and "id" not in args:
+            raise CommandError("target 'post' needs the page or post as 'slug' or 'id'.")
+        post = view.post(args)
+        folder = view.media_dir / "posts" / str(post.id) if post.id is not None else None
+        # Publii's own form for an image inside a post or page: the bare file
+        # name behind #DOMAIN_NAME#, which it expands to <domain>/media/posts/<id>/.
+        value = f"#DOMAIN_NAME#{name}"
+
+    path = (folder / name).resolve() if folder is not None else None
+    if path is not None:
+        if not path.is_relative_to(view.media_dir.resolve()):
+            raise CommandError(f"{name!r} would land outside the site's media folder.")
+        if view.media_staged(path):
+            raise CommandError(f"{name} is already added in this batch.")
+        if path.exists() and path.read_bytes() != source.read_bytes():
+            raise CommandError(f"A different file named {name} is already on the site. "
+                               f"Pass another 'name'.")
+    return {"source": source, "path": path, "name": name, "value": value, "post": post,
+            "featured": featured, "alt": alt, "target": target}
+
+
+def _op_add_media(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Copy a local image into the site's media folder and return the value to use. args: file (local path), target ('logo' -> value for update_site_settings.logo; 'post' -> '#DOMAIN_NAME#<file>' to put in the page text), slug|id (target 'post'), name? (file name on the site), featured? (true: make it the page's featured image), alt?. JPEG, PNG, WebP, GIF or SVG only; never overwrites a different file."""
+    spec = _check_add_media(_ApplyView(repo, tx), args)
+    post: PostRef | None = spec["post"]
+    if post is not None:
+        path = (repo.paths.media_dir / "posts" / str(post.id) / spec["name"]).resolve()
+    else:
+        path = spec["path"]
+    copied = tx.stage_media(spec["source"], path)
+    image_id = None
+    if spec["featured"]:
+        image_id = tx.add_post_image(post.id, url=spec["name"], alt=spec["alt"], set_as_featured=True)
+    return {"value": spec["value"], "file": spec["name"],
+            "path": str(path.relative_to(repo.paths.input_dir.resolve()).as_posix()),
+            "copied": copied, "featured_image_id": image_id,
+            "post_id": post.id if post is not None else None}
+
+
+def _ext_kind(suffix: str) -> str:
+    suffix = suffix.lower()
+    return "jpeg" if suffix in (".jpg", ".jpeg") else suffix.lstrip(".")
+
+
+def _media_name(raw: Any) -> str:
+    """A file name Publii keeps as is, or a refusal. Never a path."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise CommandError("name must be a non-empty file name.")
+    if any(sep in raw for sep in ("/", "\\", ":")) or ".." in raw:
+        raise CommandError(f"name {raw!r} must be a bare file name, without folders or '..'.")
+    name = unicodedata.normalize("NFKD", raw.strip()).encode("ascii", "ignore").decode()
+    name = re.sub(r"\s+", "-", name)
+    name = re.sub(r"[^A-Za-z0-9._-]", "", name)
+    name = re.sub(r"-{2,}", "-", name)
+    if not MEDIA_NAME_RE.match(name) or ".." in name or Path(name).suffix.lower() not in IMAGE_EXTENSIONS:
+        raise CommandError(f"{raw!r} is not a usable image file name.")
+    return name
+
+
+def _check_image(path: Path) -> None:
+    """Refuse anything whose bytes are not the image its extension claims."""
+    kind = _ext_kind(path.suffix)
+    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+        raise CommandError(f"{path.name}: only {', '.join(IMAGE_EXTENSIONS)} images are accepted.")
+    head = path.read_bytes()[:16]
+    sniffed = None
+    if head.startswith(b"\xff\xd8\xff"):
+        sniffed = "jpeg"
+    elif head.startswith(b"\x89PNG\r\n\x1a\n"):
+        sniffed = "png"
+    elif head[:6] in (b"GIF87a", b"GIF89a"):
+        sniffed = "gif"
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        sniffed = "webp"
+    elif kind == "svg":
+        text = path.read_text(encoding="utf-8", errors="replace").lstrip("\ufeff \t\r\n").lower()
+        if text.startswith(("<svg", "<?xml", "<!--", "<!doctype svg")) and "<svg" in text:
+            # An SVG is a document that can carry script. A logo never needs one.
+            if re.search(r"<script|javascript:|\son[a-z]+\s*=|<foreignobject", text):
+                raise CommandError(f"{path.name} contains script or event handlers; refused.")
+            sniffed = "svg"
+    if sniffed != kind:
+        raise CommandError(f"{path.name} is not a {kind.upper()} image (its content says "
+                           f"{sniffed or 'something else'}).")
+
+
 READ_OPS: dict[str, Callable] = {
     "list_posts": _op_list_posts,
     "get_post": _op_get_post,
@@ -642,6 +875,8 @@ WRITE_OPS: dict[str, Callable] = {
     "add_menu_item": _op_add_menu_item,
     "remove_menu_item": _op_remove_menu_item,
     "update_menu_item": _op_update_menu_item,
+    "update_site_settings": _op_update_site_settings,
+    "add_media": _op_add_media,
 }
 
 OPERATIONS = {**READ_OPS, **WRITE_OPS}
@@ -849,6 +1084,20 @@ def _describe_or_raise(repo: PubliiRepository, cmd: Command, view: _PlanView) ->
         target = (f"page {spec['ref'].slug!r}" if spec["ref"] is not None
                   else f"link {cmd.args['link']!r}")
         return f"add {cmd.args['label']!r} to menu {cmd.args['position']!r} -> {target}"
+
+    if cmd.op == "update_site_settings":
+        spec = _check_update_site_settings(view, cmd.args)
+        return "update site settings: " + ", ".join(
+            f"{k} -> {v!r}" for k, v in spec["shown"].items())
+
+    if cmd.op == "add_media":
+        spec = _check_add_media(view, cmd.args)
+        if spec["path"] is not None:
+            view.pending_media.add(spec["path"])
+        where = ("media/website" if spec["target"] == "logo" else
+                 f"media/posts/{spec['post'].id if spec['post'].id is not None else '<new id>'}")
+        extra = " and make it the featured image" if spec["featured"] else ""
+        return f"copy {spec['source'].name} to {where}/{spec['name']}{extra}; use {spec['value']!r}"
 
     if cmd.op == "remove_menu_item":
         for required in ("position", "id"):
