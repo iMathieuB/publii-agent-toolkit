@@ -61,6 +61,12 @@ EXPECTED_SCHEMA: dict[str, set[str]] = {
 # Config keys touched by writes (backed up / restored as the mutable surface).
 MENU_CONFIG = "menu.config.json"
 PAGES_CONFIG = "pages.config.json"
+SITE_CONFIG = "site.config.json"
+# The ACTIVE theme's saved options. Publii also keeps theme.<name>.config.json,
+# but only as a copy taken when switching themes (back-end/themes.js); the
+# renderer reads theme.config.json. A brand-new site has it as "{}", and the
+# renderer falls back to the theme defaults for every key it does not hold.
+THEME_CONFIG = "theme.config.json"
 
 
 def now_ms() -> int:
@@ -107,13 +113,36 @@ def _iter_menu_items(items: list[MenuItem]):
         yield from _iter_menu_items(it.items)
 
 
+def iter_pages_config(entries: list) -> Any:
+    """Yield every entry of pages.config.json, subpages included.
+
+    The file is a tree: ``[{"id": 1, "subpages": [{"id": 4, "subpages": []}]}]``.
+    Reading only the top level reported every nested page as unlisted.
+    """
+    for entry in entries or []:
+        yield entry
+        if isinstance(entry, dict) and isinstance(entry.get("subpages"), list):
+            yield from iter_pages_config(entry["subpages"])
+
+
 def evaluate_integrity(
     conn: sqlite3.Connection,
     menus: list[Menu],
     pages_config: list[dict],
+    *,
+    site_config: dict | None = None,
+    theme_config: dict | None = None,
+    input_dir: Path | None = None,
+    pending_files: set[Path] | frozenset[Path] = frozenset(),
 ) -> list[IntegrityIssue]:
     """Run all relational integrity checks against an open connection plus the
-    parsed menu and pages configs. Works on uncommitted state inside a txn."""
+    parsed menu and pages configs. Works on uncommitted state inside a txn.
+
+    ``site_config``, ``theme_config`` and ``input_dir`` are optional so older
+    callers keep working; when given, the settings that point into the content
+    (privacy-policy page, front page, theme logo) are checked too.
+    ``pending_files`` are media files staged by the same transaction, which count
+    as present."""
     issues: list[IntegrityIssue] = []
     cur = conn.cursor()
 
@@ -156,8 +185,16 @@ def evaluate_integrity(
                         detail=f"Menu '{menu.position}' item '{item.label}' links to "
                                f"missing post id {item.link}"))
 
-    # 4. pages.config <-> is-page consistency
-    config_ids = {entry.get("id") for entry in pages_config}
+    # 4. pages.config <-> is-page consistency. Publii's renderer walks
+    # ``page.subpages.filter(...)`` (render-html/renderer-cache.js), so an entry
+    # without a subpages list breaks the render, not just the page tree.
+    flat_config = list(iter_pages_config(pages_config))
+    for entry in flat_config:
+        if not isinstance(entry, dict) or not isinstance(entry.get("subpages"), list):
+            issues.append(IntegrityIssue(code="pages_config.malformed_entry", severity="ERROR",
+                                         detail=f"pages.config entry {entry!r} needs an id and a "
+                                                f"subpages list"))
+    config_ids = {entry.get("id") for entry in flat_config if isinstance(entry, dict)}
     for cid in config_ids:
         if cid not in page_ids:
             issues.append(IntegrityIssue(code="pages_config.not_a_page", severity="ERROR",
@@ -193,7 +230,62 @@ def evaluate_integrity(
             issues.append(IntegrityIssue(code="posts_tags.orphan_tag", severity="ERROR",
                                          detail=f"posts_tags references missing tag {tag_id}"))
 
+    # 7. Site settings that point into the content. Warnings: what Publii does
+    # with a dangling value here has not been verified, so it is reported, not
+    # refused. The write path (update_site_settings) refuses such values outright.
+    advanced = (site_config or {}).get("advanced") or {}
+    gdpr = advanced.get("gdpr") or {}
+    policy_id = gdpr.get("privacyPolicyPostId")
+    if (gdpr.get("enabled") and gdpr.get("showPrivacyPolicyLink", True)
+            and gdpr.get("privacyPolicyLinkType", "internal") == "internal"
+            and policy_id not in (None, "", 0, "0")):
+        try:
+            if int(policy_id) not in all_post_ids:
+                issues.append(IntegrityIssue(code="site.privacy_page_missing", severity="WARN",
+                                             detail=f"Cookie banner links to missing post id {policy_id}"))
+        except (TypeError, ValueError):
+            issues.append(IntegrityIssue(code="site.privacy_page_missing", severity="WARN",
+                                         detail=f"privacyPolicyPostId {policy_id!r} is not an id"))
+    if advanced.get("usePageAsFrontpage"):
+        front = advanced.get("pageAsFrontpage")
+        try:
+            front_ok = int(front) in page_ids
+        except (TypeError, ValueError):
+            front_ok = False
+        if not front_ok:
+            issues.append(IntegrityIssue(code="site.frontpage_not_a_page", severity="WARN",
+                                         detail=f"pageAsFrontpage {front!r} is not an is-page row"))
+
+    logo = ((theme_config or {}).get("config") or {}).get("logo") or ""
+    if logo and input_dir is not None and logo.startswith("media/website/"):
+        logo_path = (input_dir / Path(logo)).resolve()
+        if not logo_path.is_file() and logo_path not in pending_files:
+            issues.append(IntegrityIssue(code="theme.logo_missing", severity="WARN",
+                                         detail=f"Theme logo file not found: {logo}"))
+
     return issues
+
+
+def _read_additional_data(conn: sqlite3.Connection, post_id: int) -> PostAdditionalData:
+    payload: dict[str, Any] = {}
+    rows = conn.execute(
+        "SELECT key, value FROM posts_additional_data WHERE post_id=?", (post_id,)
+    ).fetchall()
+    for r in rows:
+        payload[r[0]] = _parse_json_field(r[1])
+    return PostAdditionalData.model_validate(payload)
+
+
+def _count_editors(conn: sqlite3.Connection) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    rows = conn.execute(
+        "SELECT p.id, a.value FROM posts p LEFT JOIN posts_additional_data a "
+        "ON a.post_id = p.id AND a.key = '_core'"
+    ).fetchall()
+    for row in rows:
+        editor = _parse_json_field(row[1]).get("editor") or "tinymce"
+        counts[editor] = counts.get(editor, 0) + 1
+    return counts
 
 
 # --------------------------------------------------------------------------- #
@@ -239,14 +331,8 @@ class PubliiRepository:
         return Post.model_validate(dict(row)) if row else None
 
     def get_additional_data(self, post_id: int) -> PostAdditionalData:
-        payload: dict[str, Any] = {}
         with self._connect_ro() as conn:
-            rows = conn.execute(
-                "SELECT key, value FROM posts_additional_data WHERE post_id=?", (post_id,)
-            ).fetchall()
-        for r in rows:
-            payload[r["key"]] = _parse_json_field(r["value"])
-        return PostAdditionalData.model_validate(payload)
+            return _read_additional_data(conn, post_id)
 
     def list_tags(self) -> list[Tag]:
         with self._connect_ro() as conn:
@@ -291,7 +377,32 @@ class PubliiRepository:
         return self._read_json(self.paths.config_dir / PAGES_CONFIG, default=[])
 
     def read_site_config(self) -> dict:
-        return self._read_json(self.paths.config_dir / "site.config.json", default={})
+        return self._read_json(self.paths.config_dir / SITE_CONFIG, default={})
+
+    def read_theme_config(self) -> dict:
+        return self._read_json(self.paths.config_dir / THEME_CONFIG, default={})
+
+    def find_post(self, *, slug: str | None = None, post_id: int | None = None) -> Post | None:
+        """One post or page by slug or id, read-only."""
+        if slug is not None:
+            return self.get_post_by_slug(slug)
+        if post_id is not None:
+            return self.get_post(post_id)
+        return None
+
+    def content_editors(self) -> dict[str, int]:
+        """Editor name -> number of posts and pages using it.
+
+        A row whose ``_core`` has no ``editor`` key counts as ``tinymce``, which is
+        what Publii itself assumes when listing it (src/store/getters/site-pages.js).
+        """
+        with self._connect_ro() as conn:
+            return _count_editors(conn)
+
+    def first_author_id(self) -> int | None:
+        with self._connect_ro() as conn:
+            row = conn.execute("SELECT id FROM authors ORDER BY id LIMIT 1").fetchone()
+        return int(row[0]) if row else None
 
     def next_post_id(self) -> int:
         """Next id SQLite would assign to ``posts`` (seq + 1)."""
@@ -311,7 +422,10 @@ class PubliiRepository:
     # -- integrity (read-only, standalone) ---------------------------------- #
     def check_integrity(self) -> list[IntegrityIssue]:
         with self._connect_ro() as conn:
-            return evaluate_integrity(conn, self.read_menus(), self.read_pages_config())
+            return evaluate_integrity(conn, self.read_menus(), self.read_pages_config(),
+                                      site_config=self.read_site_config(),
+                                      theme_config=self.read_theme_config(),
+                                      input_dir=self.paths.input_dir)
 
     # -- write entrypoint ---------------------------------------------------- #
     def transaction(self) -> "PubliiTransaction":
@@ -339,6 +453,12 @@ class PubliiTransaction:
         self._backup_dir: Path | None = None
         self._staged: dict[Path, Path] = {}      # target -> tmp path
         self._json_cache: dict[Path, Any] = {}   # target -> current (staged) data
+        # Media files are not part of the input/ backup (it covers db.sqlite and
+        # config/ only), so they are staged and tracked separately: copied to a
+        # temp name first, moved into place just before COMMIT, deleted on abort.
+        self._staged_media: dict[Path, Path] = {}  # final path -> tmp path
+        self._placed_media: list[Path] = []
+        self._created_dirs: list[Path] = []
         self._db_committed = False
 
     # -- context management -------------------------------------------------- #
@@ -376,12 +496,23 @@ class PubliiTransaction:
                 # Exception raised inside the with-block.
                 self._abort(exc)
                 return False  # propagate original exception
-            # Success path: integrity gate, then commit, then atomic JSON swap.
-            issues = evaluate_integrity(self._conn, self._current_menus(),
-                                        self._current_pages_config())
+            # Success path: integrity gate, media into place, commit, JSON swap.
+            issues = evaluate_integrity(
+                self._conn, self._current_menus(), self._current_pages_config(),
+                site_config=self.current_site_config(),
+                theme_config=self.current_theme_config(),
+                input_dir=self.paths.input_dir,
+                pending_files=frozenset(self._staged_media),
+            )
             errors = [i for i in issues if i.severity == "ERROR"]
             if errors:
                 raise PubliiIntegrityError(errors)
+            # Media goes in BEFORE the commit: an unreferenced file is harmless,
+            # a committed reference to a missing file is not. A failed commit
+            # deletes these files again in _abort.
+            for target, tmp in self._staged_media.items():
+                os.replace(str(tmp), str(target))
+                self._placed_media.append(target)
             self._conn.execute("COMMIT")
             self._db_committed = True
             for target, tmp in self._staged.items():
@@ -427,7 +558,19 @@ class PubliiTransaction:
                 Path(tmp).unlink(missing_ok=True)
             except Exception:  # noqa: BLE001
                 pass
-        # c. close DB handle so files can be replaced on Windows, then restore.
+        # c. media: staged temp files and files already moved into place, then
+        #    the directories this transaction created, if they are empty again.
+        for path in [*self._staged_media.values(), *self._placed_media]:
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+        for directory in reversed(self._created_dirs):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        # d. close DB handle so files can be replaced on Windows, then restore.
         self._close()
         self._restore_input()
 
@@ -473,6 +616,47 @@ class PubliiTransaction:
 
     def _current_pages_config(self) -> list[dict]:
         return self._current_json(self.paths.config_dir / PAGES_CONFIG, default=[])
+
+    def current_menus(self) -> list[Menu]:
+        """Menus as this transaction currently sees them, staged changes included."""
+        return self._current_menus()
+
+    def current_site_config(self) -> dict:
+        return self._current_json(self.paths.config_dir / SITE_CONFIG, default={})
+
+    def current_theme_config(self) -> dict:
+        return self._current_json(self.paths.config_dir / THEME_CONFIG, default={})
+
+    # -- reads through the write connection ---------------------------------- #
+    # These see rows inserted earlier in the same transaction, which the
+    # repository's read-only connection does not. That is what lets one batch
+    # create a page and then link a menu entry or a setting to it.
+    def find_post(self, *, slug: str | None = None, post_id: int | None = None) -> Post | None:
+        if slug is not None:
+            row = self._conn.execute("SELECT * FROM posts WHERE slug=?", (slug,)).fetchone()
+        elif post_id is not None:
+            row = self._conn.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
+        else:
+            return None
+        return Post.model_validate(dict(row)) if row else None
+
+    def get_additional_data(self, post_id: int) -> PostAdditionalData:
+        return _read_additional_data(self._conn, post_id)
+
+    def content_editors(self) -> dict[str, int]:
+        return _count_editors(self._conn)
+
+    def first_author_id(self) -> int | None:
+        row = self._conn.execute("SELECT id FROM authors ORDER BY id LIMIT 1").fetchone()
+        return int(row[0]) if row else None
+
+    def staged_media(self) -> frozenset[Path]:
+        return frozenset(self._staged_media)
+
+    @property
+    def backup_dir(self) -> Path | None:
+        """Where this transaction backed up input/ before changing anything."""
+        return self._backup_dir
 
     # -- write operations (SQLite buffered; JSON staged) -------------------- #
     def update_post_fields(self, post_id: int, *, title: str | None = None,
@@ -554,20 +738,18 @@ class PubliiTransaction:
 
     def register_page(self, post_id: int, parent_id: int | None = None) -> None:
         cfg = list(self._current_pages_config())
-        if any(e.get("id") == post_id for e in cfg):
+        if any(isinstance(e, dict) and e.get("id") == post_id for e in iter_pages_config(cfg)):
             return
         entry = {"id": post_id, "subpages": []}
         if parent_id is None:
             cfg.append(entry)
         else:
-            placed = False
-            for e in cfg:
-                if e.get("id") == parent_id:
-                    e.setdefault("subpages", []).append(entry)
-                    placed = True
-                    break
-            if not placed:
+            # The parent may itself be a subpage: search the whole tree.
+            parent = next((e for e in iter_pages_config(cfg)
+                           if isinstance(e, dict) and e.get("id") == parent_id), None)
+            if parent is None:
                 raise ValueError(f"Parent page id {parent_id} not found in pages.config")
+            parent.setdefault("subpages", []).append(entry)
         self._stage_json(self.paths.config_dir / PAGES_CONFIG, cfg)
         self.log.info("Staged pages.config registration for page %s", post_id)
 
@@ -686,6 +868,86 @@ class PubliiTransaction:
         self._stage_json(self.paths.config_dir / MENU_CONFIG, menus)
         self.log.info("Staged menu removal of id %s from '%s'", item_id, position)
 
+    def create_menu(self, name: str, position: str, *, max_levels: int | str = -1) -> None:
+        """Add an empty menu assigned to a theme position.
+
+        A new Publii site starts with ``menu.config.json`` holding ``[]``
+        (back-end/site.js), so there is nothing to add an entry to until a menu
+        exists. The object shape mirrors Publii's own (``addNewMenu`` in
+        src/store/helpers/mutations.js, then a position and ``maxLevels``, which
+        Publii stores as a string, e.g. "-1" or "1", on every live site checked).
+        """
+        menus = self._current_json(self.paths.config_dir / MENU_CONFIG, default=[])
+        taken = {p for m in menus for p in str(m.get("position") or "").split(";") if p}
+        if position in taken:
+            raise ValueError(f"Menu position '{position}' is already assigned")
+        menus.append({"name": name, "position": position, "items": [],
+                      "maxLevels": str(max_levels)})
+        self._stage_json(self.paths.config_dir / MENU_CONFIG, menus)
+        self.log.info("Staged new menu %r at position '%s'", name, position)
+
+    def set_config_values(self, filename: str, values: dict[tuple[str, ...], Any]) -> None:
+        """Set nested keys in site.config.json or theme.config.json, staged.
+
+        ``values`` maps a key path, e.g. ``("advanced", "gdpr", "enabled")``, to
+        its new value. Missing intermediate objects are created: Publii deep-merges
+        both files over its defaults when it reads them (Utils.mergeObjects for
+        the site config, Themes.loadThemeConfig for the theme), so a partial
+        object is how a brand-new site stores them anyway. Every other key is
+        left exactly as it was. Which keys may be set is the caller's decision;
+        the agent layer holds the whitelist.
+        """
+        if filename not in (SITE_CONFIG, THEME_CONFIG):
+            raise ValueError(f"set_config_values only edits {SITE_CONFIG} and {THEME_CONFIG}")
+        path = self.paths.config_dir / filename
+        data = self._current_json(path, default={})
+        if not isinstance(data, dict):
+            raise ValueError(f"{filename} does not hold a JSON object")
+        for keys, value in values.items():
+            node = data
+            for key in keys[:-1]:
+                child = node.get(key)
+                if child is None:
+                    child = node[key] = {}
+                if not isinstance(child, dict):
+                    raise ValueError(f"{filename}: {'.'.join(keys)} crosses a non-object value")
+                node = child
+            node[keys[-1]] = value
+        self._stage_json(path, data)
+        self.log.info("Staged %s update: %s", filename, [".".join(k) for k in values])
+
+    def stage_media(self, source: Path, target: Path) -> bool:
+        """Copy ``source`` to ``target`` (inside input/media) as part of this transaction.
+
+        The copy lands under a temp name now and is moved into place just before
+        COMMIT; an abort deletes it. Returns False when ``target`` already holds a
+        byte-identical file (nothing to do), and raises when it holds a different
+        one: this method never overwrites a media file.
+        """
+        media_root = self.paths.media_dir.resolve()
+        target = Path(target).resolve()
+        if not target.is_relative_to(media_root):
+            raise ValueError(f"Refusing to write outside {media_root}: {target}")
+        if target in self._staged_media:
+            raise ValueError(f"{target.name} is already staged in this batch")
+        if target.exists():
+            if target.is_file() and _same_bytes(Path(source), target):
+                return False
+            raise ValueError(f"A different file already exists at {target}; choose another name")
+        missing: list[Path] = []
+        parent = target.parent
+        while not parent.exists():
+            missing.append(parent)
+            parent = parent.parent
+        for directory in reversed(missing):
+            directory.mkdir()
+            self._created_dirs.append(directory)
+        tmp = target.with_name(target.name + ".tmp")
+        shutil.copyfile(source, tmp)
+        self._staged_media[target] = tmp
+        self.log.info("Staged media %s -> %s", source, target)
+        return True
+
     def update_menu_item(self, position: str, item_id: int, **fields: Any) -> None:
         """Change fields of one menu item in place, its label for instance.
 
@@ -706,6 +968,18 @@ class PubliiTransaction:
         MenuItem.model_validate(item)
         self._stage_json(self.paths.config_dir / MENU_CONFIG, menus)
         self.log.info("Staged menu update of id %s in '%s': %s", item_id, position, sorted(fields))
+
+
+def _same_bytes(a: Path, b: Path) -> bool:
+    if a.stat().st_size != b.stat().st_size:
+        return False
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        while True:
+            chunk = fa.read(1 << 16)
+            if chunk != fb.read(1 << 16):
+                return False
+            if not chunk:
+                return True
 
 
 def _attach_to_parent(items: list[dict], parent_id: int, new_item: dict) -> bool:

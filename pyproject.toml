@@ -41,3 +41,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Run from a checkout without installing the package first.
+pythonpath = ["src"]

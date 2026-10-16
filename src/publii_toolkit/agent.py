@@ -31,7 +31,9 @@ A request is a JSON object::
     {"op": "update_post", "slug": "about", "title": "About us"}
 
 A batch is a JSON array of those objects, applied in order, all inside one
-transaction. Either every command lands or none does.
+transaction. Either every command lands or none does. A later command may refer
+to a page an earlier command of the same batch creates, by its slug: a site can
+be built, menu and settings included, in one plan and one apply.
 
 Every response is a JSON object with ``ok`` and either ``result`` or ``error``,
 so an agent never has to parse prose to find out what happened.
@@ -41,11 +43,22 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import subprocess
+import sys
+import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
-from .models import CoreMeta, MenuItem, Post, PostAdditionalData
-from .repository import PubliiIntegrityError, PubliiLockedError, PubliiRepository
+from .models import CoreMeta, Menu, MenuItem, Post, PostAdditionalData
+from .repository import (
+    SITE_CONFIG,
+    THEME_CONFIG,
+    PubliiIntegrityError,
+    PubliiLockedError,
+    PubliiRepository,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,6 +87,30 @@ class Command:
             )
         args = {k: v for k, v in payload.items() if k != "op"}
         return cls(op=op, args=args)
+
+
+# ------------------------------------------------------------ verified facts
+# Everything below was read from Publii 0.47.6 (resources/app.asar) or from
+# live sites, not assumed. The source file is named where it matters.
+
+# Editors this toolkit writes page text for. Publii offers three when a page is
+# created (src/components/Pages.vue): "tinymce" (WYSIWYG, stores HTML),
+# "markdown" (stores Markdown) and "blockeditor" (stores a JSON block structure,
+# which this toolkit does not generate). There is no site-wide default: the
+# person picks one per page, and a brand-new site has no page to infer it from.
+WRITABLE_EDITORS = ("markdown", "tinymce")
+
+PAGE_STATUSES = ("published", "draft")
+
+# Publii slugs are lower-case ASCII words joined by hyphens (back-end/helpers/
+# slug.js). Anything else would be rewritten by Publii on the next save.
+SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+
+# Images Publii itself accepts (back-end/image.js), plus SVG and GIF, which it
+# copies without resizing. Checked against the file's first bytes, not its name.
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg")
+MAX_MEDIA_BYTES = 20 * 1024 * 1024
+MEDIA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 # --------------------------------------------------------------------- reading
@@ -112,6 +149,7 @@ def _op_get_post(repo: PubliiRepository, args: dict) -> Any:
             "metaDesc": extra.core.metaDesc,
             "metaRobots": extra.core.metaRobots,
             "canonicalUrl": extra.core.canonicalUrl,
+            "editor": extra.core.editor,
         },
         "tags": repo.get_post_tag_ids(post.id),
     }
@@ -123,7 +161,7 @@ def _op_list_tags(repo: PubliiRepository, args: dict) -> Any:
 
 
 def _op_list_menus(repo: PubliiRepository, args: dict) -> Any:
-    """List menus and their items, nesting preserved."""
+    """List menus and their items, nesting preserved. A brand-new site has none."""
 
     def render(items: list[MenuItem]) -> list[dict]:
         return [
@@ -143,6 +181,32 @@ def _op_list_menus(repo: PubliiRepository, args: dict) -> Any:
     ]
 
 
+def _op_get_site_settings(repo: PubliiRepository, args: dict) -> Any:
+    """The settings update_site_settings can change, the theme's menu positions, and the editors in use. Never returns credentials."""
+    view = _PlanView(repo)
+    site = repo.read_site_config()
+    theme = repo.read_theme_config()
+    advanced = site.get("advanced") or {}
+    gdpr = advanced.get("gdpr") or {}
+    return {
+        # Built field by field from the whitelist: nothing else from
+        # site.config.json, which also holds the deployment credentials, can
+        # reach the output.
+        "site_name": site.get("displayName", ""),
+        "site_description": advanced.get("metaDescription", ""),
+        "logo": ((theme.get("config") or {}).get("logo") or ""),
+        "cookie_banner": bool(gdpr.get("enabled", False)),
+        "privacy_policy_page": gdpr.get("privacyPolicyPostId") or None,
+        "front_page": advanced.get("pageAsFrontpage") if advanced.get("usePageAsFrontpage") else None,
+        "theme": site.get("theme", ""),
+        "theme_menu_positions": {
+            position: {"name": spec.get("name", position), "in_use": position in view.menu_positions()}
+            for position, spec in _theme_menus(view).items()
+        },
+        "content_editors": repo.content_editors(),
+    }
+
+
 def _op_check(repo: PubliiRepository, args: dict) -> Any:
     """Run the structural integrity check and report, without changing anything."""
     issues = repo.check_integrity()
@@ -154,6 +218,114 @@ def _op_check(repo: PubliiRepository, args: dict) -> Any:
     }
 
 
+# ------------------------------------------------------------- two site views
+# A write command is validated twice: by plan, against the site as it is on
+# disk plus whatever earlier steps of the batch would create, and by apply,
+# against the open transaction. Both views answer the same questions, so each
+# command has a single validation function and plan cannot drift from apply.
+
+
+@dataclass
+class PostRef:
+    id: int | None  # None while the page only exists later in the batch being planned
+    slug: str
+    is_page: bool
+
+
+class _PlanView:
+    """The site on disk, plus what earlier steps of the planned batch would add."""
+
+    def __init__(self, repo: PubliiRepository) -> None:
+        self.repo = repo
+        self.input_dir = repo.paths.input_dir
+        self.media_dir = repo.paths.media_dir
+        self.pending_pages: dict[str, str] = {}  # slug -> editor
+        self.pending_menus: set[str] = set()
+        self.pending_media: set[Path] = set()
+
+    def post(self, args: dict) -> PostRef:
+        if "slug" in args and str(args["slug"]) in self.pending_pages:
+            return PostRef(id=None, slug=str(args["slug"]), is_page=True)
+        post = _resolve_post(self.repo, args)
+        return PostRef(id=post.id, slug=post.slug, is_page=post.is_page)
+
+    def slug_taken(self, slug: str) -> bool:
+        return slug in self.pending_pages or self.repo.get_post_by_slug(slug) is not None
+
+    def editors(self) -> dict[str, int]:
+        counts = dict(self.repo.content_editors())
+        for editor in self.pending_pages.values():
+            counts[editor] = counts.get(editor, 0) + 1
+        return counts
+
+    def menus(self) -> list[Menu]:
+        return self.repo.read_menus()
+
+    def menu_positions(self) -> set[str]:
+        return _positions(self.menus()) | self.pending_menus
+
+    def site_config(self) -> dict:
+        return self.repo.read_site_config()
+
+    def theme_config(self) -> dict:
+        return self.repo.read_theme_config()
+
+    def media_present(self, path: Path) -> bool:
+        return path.resolve() in self.pending_media or path.is_file()
+
+    def media_staged(self, path: Path) -> bool:
+        return path.resolve() in self.pending_media
+
+    def has_author(self) -> bool:
+        return self.repo.first_author_id() is not None
+
+
+class _ApplyView:
+    """The open transaction: committed rows plus everything staged so far."""
+
+    def __init__(self, repo: PubliiRepository, tx) -> None:
+        self.repo = repo
+        self.tx = tx
+        self.input_dir = repo.paths.input_dir
+        self.media_dir = repo.paths.media_dir
+
+    def post(self, args: dict) -> PostRef:
+        post = _resolve_post_tx(self.tx, args)
+        return PostRef(id=post.id, slug=post.slug, is_page=post.is_page)
+
+    def slug_taken(self, slug: str) -> bool:
+        return self.tx.find_post(slug=slug) is not None
+
+    def editors(self) -> dict[str, int]:
+        return self.tx.content_editors()
+
+    def menus(self) -> list[Menu]:
+        return self.tx.current_menus()
+
+    def menu_positions(self) -> set[str]:
+        return _positions(self.menus())
+
+    def site_config(self) -> dict:
+        return self.tx.current_site_config()
+
+    def theme_config(self) -> dict:
+        return self.tx.current_theme_config()
+
+    def media_present(self, path: Path) -> bool:
+        return path.resolve() in self.tx.staged_media() or path.is_file()
+
+    def media_staged(self, path: Path) -> bool:
+        return path.resolve() in self.tx.staged_media()
+
+    def has_author(self) -> bool:
+        return self.tx.first_author_id() is not None
+
+
+def _positions(menus: list[Menu]) -> set[str]:
+    # Publii stores a menu shown in several places as "mainMenu;footerMenu".
+    return {p for m in menus for p in (m.position or "").split(";") if p}
+
+
 # --------------------------------------------------------------------- writing
 # Each writer takes an open transaction. They never open one themselves, which
 # is what lets a batch of commands share a single atomic unit of work.
@@ -161,7 +333,7 @@ def _op_check(repo: PubliiRepository, args: dict) -> Any:
 
 def _op_update_post(repo: PubliiRepository, tx, args: dict) -> Any:
     """Change a post's title, body or status. args: slug|id, title?, text?, status?."""
-    post = _resolve_post(repo, args)
+    post = _resolve_post_tx(tx, args)
     fields = {k: args[k] for k in ("title", "text", "status") if k in args}
     if not fields:
         raise CommandError("update_post needs at least one of: title, text, status.")
@@ -171,8 +343,10 @@ def _op_update_post(repo: PubliiRepository, tx, args: dict) -> Any:
 
 def _op_update_meta(repo: PubliiRepository, tx, args: dict) -> Any:
     """Change SEO metadata. args: slug|id, metaTitle?, metaDesc?, metaRobots?, canonicalUrl?."""
-    post = _resolve_post(repo, args)
-    current = repo.get_additional_data(post.id)
+    post = _resolve_post_tx(tx, args)
+    # Read through the transaction: a page created earlier in the batch has a
+    # _core row only there, and rebuilding it from defaults would reset its editor.
+    current = tx.get_additional_data(post.id)
     known = ("metaTitle", "metaDesc", "metaRobots", "canonicalUrl")
     supplied = {k: args[k] for k in known if k in args}
     if not supplied:
@@ -194,7 +368,7 @@ def _op_update_meta(repo: PubliiRepository, tx, args: dict) -> Any:
 
 def _op_set_tags(repo: PubliiRepository, tx, args: dict) -> Any:
     """Replace a post's tags. args: slug|id, tags (list of tag slugs)."""
-    post = _resolve_post(repo, args)
+    post = _resolve_post_tx(tx, args)
     tags = args.get("tags")
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
         raise CommandError('set_tags needs "tags" as a list of tag slugs.')
@@ -202,22 +376,219 @@ def _op_set_tags(repo: PubliiRepository, tx, args: dict) -> Any:
     return {"id": post.id, "slug": post.slug, "tags": tags}
 
 
-def _op_add_menu_item(repo: PubliiRepository, tx, args: dict) -> Any:
-    """Add a menu entry. args: position, label, link, type?, parent_id?."""
-    for required in ("position", "label", "link"):
+# -- create_page -------------------------------------------------------------- #
+
+CREATE_PAGE_ARGS = {"title", "slug", "text", "editor", "status", "metaTitle", "metaDesc",
+                    "parent_id", "parent"}
+
+
+def _check_create_page(view, args: dict) -> dict:
+    extra = sorted(set(args) - CREATE_PAGE_ARGS)
+    if extra:
+        raise CommandError(f"create_page does not take {extra}. Allowed: {sorted(CREATE_PAGE_ARGS)}.")
+    for required in ("title", "slug", "text"):
+        if not isinstance(args.get(required), str):
+            raise CommandError(f"create_page needs {required!r} as a string.")
+    title, slug, text = args["title"].strip(), args["slug"], args["text"]
+    if not title:
+        raise CommandError("create_page needs a non-empty title.")
+    if not SLUG_RE.match(slug):
+        raise CommandError(
+            f"Slug {slug!r} is not one Publii would keep: use lower-case letters, digits "
+            f"and single hyphens, e.g. 'a-propos'."
+        )
+    restricted = _restricted_slugs(view.site_config())
+    if slug in restricted:
+        raise CommandError(f"Slug {slug!r} is reserved by Publii's URL scheme ({sorted(restricted)}).")
+    if view.slug_taken(slug):
+        raise CommandError(f"Slug {slug!r} is already used on this site. Slugs must be unique.")
+
+    status = args.get("status", "published")
+    if status not in PAGE_STATUSES:
+        raise CommandError(f"status must be one of {list(PAGE_STATUSES)}, not {status!r}.")
+
+    editor = _choose_editor(view, args.get("editor"))
+    if editor == "tinymce" and text.strip() and not text.lstrip().startswith("<"):
+        raise CommandError(
+            "This page uses the WYSIWYG editor (tinymce), which stores HTML. Wrap the text "
+            "in tags, e.g. '<p>Bienvenue</p>', or create the page with editor 'markdown'."
+        )
+
+    for key in ("metaTitle", "metaDesc"):
+        if key in args and not isinstance(args[key], str):
+            raise CommandError(f"{key} must be a string.")
+
+    if "parent_id" in args and "parent" in args:
+        raise CommandError("Give the parent page as parent_id or as parent (its slug), not both.")
+    parent: PostRef | None = None
+    if "parent_id" in args or "parent" in args:
+        ref_args = {"id": args["parent_id"]} if "parent_id" in args else {"slug": args["parent"]}
+        parent = view.post(ref_args)
+        if not parent.is_page:
+            raise CommandError(f"Parent {parent.slug!r} is a post, not a page.")
+
+    if not view.has_author():
+        raise CommandError("The site has no author row; open it once in Publii first.")
+
+    return {"title": title, "slug": slug, "text": text, "status": status, "editor": editor,
+            "metaTitle": args.get("metaTitle", ""), "metaDesc": args.get("metaDesc", ""),
+            "parent": parent}
+
+
+def _choose_editor(view, requested: Any) -> str:
+    """The editor a new page is stored for: as asked, or the one the site uses.
+
+    Inferred only when every existing post and page uses the same editor.
+    Ordinata's own sites mix Markdown and WYSIWYG pages, and a brand-new site
+    has no page at all, so both cases need the editor spelled out.
+    """
+    if requested is not None:
+        if requested not in WRITABLE_EDITORS:
+            raise CommandError(
+                f"editor must be one of {list(WRITABLE_EDITORS)}, not {requested!r}. "
+                f"Publii's block editor stores a JSON structure this toolkit does not write."
+            )
+        return requested
+    counts = view.editors()
+    if len(counts) == 1:
+        (only,) = counts
+        if only in WRITABLE_EDITORS:
+            return only
+        raise CommandError(
+            f"Every page on this site uses the {only!r} editor, which this toolkit does not "
+            f"write. Pass editor 'markdown' or 'tinymce' explicitly."
+        )
+    found = ", ".join(f"{name} x{n}" for name, n in sorted(counts.items())) or "no page yet"
+    raise CommandError(
+        f"Cannot tell which editor this page should use ({found}). Pass \"editor\": "
+        f"\"tinymce\" (Publii's WYSIWYG editor, text in HTML, easiest for the owner to edit "
+        f"later) or \"markdown\" (text in Markdown)."
+    )
+
+
+def _restricted_slugs(site_config: dict) -> set[str]:
+    # Publii refuses these for pages when clean URLs are on (back-end/page.js,
+    # checkAndPrepareSlug) and renames the page. Refused here whatever the URL
+    # mode, plus the pagination folder name, so a page never collides with them.
+    urls = ((site_config.get("advanced") or {}).get("urls") or {})
+    names = {"assets", "media",
+             urls.get("authorsPrefix", "authors"),
+             urls.get("tagsPrefix", "tags"),
+             urls.get("postsPrefix", ""),
+             urls.get("pageName", "page")}
+    return {n for n in names if n}
+
+
+def _op_create_page(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Create a page and register it in pages.config.json. args: title, slug (unique), text, editor? ('tinymce' = HTML, 'markdown'; required when the site does not settle it), status? (published|draft), metaTitle?, metaDesc?, parent_id? or parent? (slug of the parent page)."""
+    spec = _check_create_page(_ApplyView(repo, tx), args)
+    author = tx.first_author_id()
+    post = Post(
+        id=0,
+        title=spec["title"],
+        authors=str(author),
+        slug=spec["slug"],
+        text=spec["text"],
+        created_at=0,
+        modified_at=0,
+        status=f"{spec['status']},is-page",
+        template="",
+    )
+    # The _core blob Publii writes for a page has exactly these five keys
+    # (verified on live sites); CoreMeta dumps them and nothing else.
+    core = CoreMeta(metaTitle=spec["metaTitle"], metaDesc=spec["metaDesc"], editor=spec["editor"])
+    parent: PostRef | None = spec["parent"]
+    new_id = tx.create_post(post, core=core, register_as_page=parent is None)
+    if parent is not None:
+        tx.register_page(new_id, parent_id=parent.id)
+    return {"id": new_id, "slug": spec["slug"], "editor": spec["editor"],
+            "status": post.status, "parent_id": parent.id if parent else None}
+
+
+# -- menus -------------------------------------------------------------------- #
+
+
+def _theme_menus(view) -> dict[str, dict]:
+    """Menu positions the active theme renders, from its own config.json."""
+    theme = str(view.site_config().get("theme") or "")
+    if not theme or not MEDIA_NAME_RE.match(theme):
+        return {}
+    path = view.input_dir / "themes" / theme / "config.json"
+    if not path.is_file():
+        return {}
+    try:
+        menus = json.loads(path.read_text(encoding="utf-8")).get("menus") or {}
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return {}
+    return menus if isinstance(menus, dict) else {}
+
+
+def _check_create_menu(view, args: dict) -> dict:
+    extra = sorted(set(args) - {"position", "name"})
+    if extra:
+        raise CommandError(f"create_menu does not take {extra}.")
+    position = args.get("position")
+    if not isinstance(position, str) or not position:
+        raise CommandError("create_menu needs 'position', one of the theme's menu positions.")
+    available = _theme_menus(view)
+    if position not in available:
+        raise CommandError(
+            f"The theme has no menu position {position!r}. Available: {sorted(available) or 'none found'}."
+        )
+    if position in view.menu_positions():
+        raise CommandError(f"A menu already uses position {position!r}; add items to it instead.")
+    name = args.get("name", available[position].get("name") or position)
+    if not isinstance(name, str) or not name.strip():
+        raise CommandError("create_menu 'name' must be a non-empty string.")
+    return {"position": position, "name": name.strip(),
+            "max_levels": available[position].get("maxLevels", -1)}
+
+
+def _op_create_menu(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Create an empty menu at one of the theme's positions (a new site has no menu at all). args: position (e.g. mainMenu, footerMenu; see get_site_settings), name?."""
+    spec = _check_create_menu(_ApplyView(repo, tx), args)
+    tx.create_menu(spec["name"], spec["position"], max_levels=spec["max_levels"])
+    return {"position": spec["position"], "name": spec["name"]}
+
+
+def _check_add_menu_item(view, args: dict) -> dict:
+    for required in ("position", "label"):
         if required not in args:
             raise CommandError(f"add_menu_item needs {required!r}.")
+    if ("link" in args) == ("page" in args):
+        raise CommandError("add_menu_item needs exactly one of 'link' (a post id, a URL or '#') "
+                           "or 'page' (a page slug).")
+    if args["position"] not in view.menu_positions():
+        raise CommandError(
+            f"No menu at position {args['position']!r}. Create it first with create_menu."
+        )
+    if "parent_id" in args:
+        parent_id = _as_int(args["parent_id"], "parent_id")
+        items = [i for m in view.menus() if args["position"] in (m.position or "").split(";")
+                 for i in _flatten(m.items)]
+        if not any(i.id == parent_id for i in items):
+            raise CommandError(f"No item {parent_id} in menu {args['position']!r}.")
+    if "page" in args:
+        ref = view.post({"slug": args["page"]})
+        return {"type": args.get("type", "page" if ref.is_page else "post"), "ref": ref}
+    return {"type": args.get("type", "page"), "ref": None}
 
-    menus = repo.read_menus()
-    used = {i.id for m in menus for i in _flatten(m.items)}
+
+def _op_add_menu_item(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Add a menu entry. args: position, label, and link (post id, URL or '#') or page (a page slug, even one created earlier in the batch); type?, parent_id?."""
+    spec = _check_add_menu_item(_ApplyView(repo, tx), args)
+    link = spec["ref"].id if spec["ref"] is not None else args["link"]
+    # Ids come from the menus as staged in this transaction: two entries added
+    # in one batch used to get the same id, both computed from the file on disk.
+    used = {i.id for m in tx.current_menus() for i in _flatten(m.items)}
     item = MenuItem(
         id=(max(used) + 1) if used else 1,
         label=args["label"],
-        type=args.get("type", "page"),
-        link=args["link"],
+        type=spec["type"],
+        link=link,
     )
     tx.inject_menu_item(args["position"], item, parent_id=args.get("parent_id"))
-    return {"position": args["position"], "id": item.id, "label": item.label}
+    return {"position": args["position"], "id": item.id, "label": item.label, "link": link}
 
 
 def _op_remove_menu_item(repo: PubliiRepository, tx, args: dict) -> Any:
@@ -258,13 +629,16 @@ READ_OPS: dict[str, Callable] = {
     "get_post": _op_get_post,
     "list_tags": _op_list_tags,
     "list_menus": _op_list_menus,
+    "get_site_settings": _op_get_site_settings,
     "check": _op_check,
 }
 
 WRITE_OPS: dict[str, Callable] = {
+    "create_page": _op_create_page,
     "update_post": _op_update_post,
     "update_meta": _op_update_meta,
     "set_tags": _op_set_tags,
+    "create_menu": _op_create_menu,
     "add_menu_item": _op_add_menu_item,
     "remove_menu_item": _op_remove_menu_item,
     "update_menu_item": _op_update_menu_item,
@@ -274,6 +648,26 @@ OPERATIONS = {**READ_OPS, **WRITE_OPS}
 
 
 # ----------------------------------------------------------------- the session
+
+
+def publii_is_running() -> bool:
+    """True when the Publii desktop app is open (Windows; elsewhere, unknown -> False).
+
+    Publii keeps a site's configuration in memory and writes it back when its
+    settings are saved, so a change made under it can be silently overwritten.
+    The database lock does not cover that: a config-only change never touches
+    a row. Hence a process check before any apply.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq Publii.exe", "/NH"],
+            capture_output=True, text=True, check=False, timeout=15,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "Publii.exe" in (out or "")
 
 
 class AgentSession:
@@ -303,7 +697,9 @@ class AgentSession:
         """Describe what a batch would do. Opens no transaction, writes nothing.
 
         Everything checkable by reading is checked here, so an agent learns that
-        a slug does not exist before anything is locked or backed up.
+        a slug does not exist before anything is locked or backed up. Steps are
+        checked in order against the site plus what earlier steps would create,
+        so a page made in step 1 can be linked from a menu in step 2.
 
         A problem in one step marks the whole plan not-ok, because ``apply`` is
         all-or-nothing: a batch containing one bad command lands none of them.
@@ -312,6 +708,7 @@ class AgentSession:
         """
         steps: list[dict[str, Any]] = []
         problems: list[str] = []
+        view = _PlanView(self.repo)
 
         for index, payload in enumerate(payloads):
             cmd = Command.parse(payload)
@@ -320,8 +717,8 @@ class AgentSession:
 
             step: dict[str, Any] = {"index": index, "op": cmd.op, "args": cmd.args}
             try:
-                step["describes"] = _describe_or_raise(self.repo, cmd)
-            except CommandError as exc:
+                step["describes"] = _describe_or_raise(self.repo, cmd, view)
+            except (CommandError, ValueError) as exc:
                 step["problem"] = str(exc)
                 step["describes"] = f"would fail: {exc}"
                 problems.append(f"step {index} ({cmd.op}): {exc}")
@@ -352,10 +749,16 @@ class AgentSession:
         for cmd in commands:
             if cmd.op in READ_OPS:
                 raise CommandError(f"{cmd.op!r} is a read. Use read() for it.")
+        if publii_is_running():
+            return _err("publii_running",
+                        "Publii is open. Close it, then apply again: it would overwrite "
+                        "configuration changes with the copy it holds in memory.")
 
         results = []
+        backup = None
         try:
             with self.repo.transaction() as tx:
+                backup = tx.backup_dir
                 for cmd in commands:
                     results.append(
                         {"op": cmd.op, "result": WRITE_OPS[cmd.op](self.repo, tx, cmd.args)}
@@ -364,10 +767,15 @@ class AgentSession:
             return _err("site_locked", str(exc))
         except PubliiIntegrityError as exc:
             return _err("integrity_failed", str(exc))
-        except CommandError as exc:
+        except (CommandError, ValueError) as exc:
+            # ValueError is what the transaction raises for a target it cannot
+            # find (an unknown tag slug, a missing parent). Same meaning, same code.
             return _err("bad_command", str(exc))
+        except OSError as exc:
+            return _err("io_error", str(exc))
 
-        return _ok({"applied": results, "count": len(results)})
+        return _ok({"applied": results, "count": len(results),
+                    "backup": str(backup) if backup else None})
 
 
 # --------------------------------------------------------------------- helpers
@@ -380,31 +788,67 @@ def _resolve_post(repo: PubliiRepository, args: dict) -> Post:
             raise CommandError(f"No post or page with slug {args['slug']!r}.")
         return post
     if "id" in args:
-        post = repo.get_post(int(args["id"]))
+        post = repo.get_post(_as_int(args["id"], "id"))
         if post is None:
             raise CommandError(f"No post or page with id {args['id']}.")
         return post
     raise CommandError('Identify the post with "slug" or "id".')
 
 
-def _describe_or_raise(repo: PubliiRepository, cmd: Command) -> str:
+def _resolve_post_tx(tx, args: dict) -> Post:
+    """Like _resolve_post, but sees pages created earlier in the same transaction."""
+    if "slug" in args:
+        post = tx.find_post(slug=str(args["slug"]))
+        if post is None:
+            raise CommandError(f"No post or page with slug {args['slug']!r}.")
+        return post
+    if "id" in args:
+        post = tx.find_post(post_id=_as_int(args["id"], "id"))
+        if post is None:
+            raise CommandError(f"No post or page with id {args['id']}.")
+        return post
+    raise CommandError('Identify the post with "slug" or "id".')
+
+
+def _as_int(value: Any, name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise CommandError(f"{name} must be an integer, not {value!r}.") from None
+
+
+def _describe_or_raise(repo: PubliiRepository, cmd: Command, view: _PlanView) -> str:
     """A one-line summary of what a command would do.
 
     Raises CommandError when the command cannot run at all, which is how
-    ``plan`` finds problems without opening a transaction.
+    ``plan`` finds problems without opening a transaction. A step that passes
+    records what it would create in ``view``, for the steps after it.
     """
     if cmd.op in {"update_post", "update_meta", "set_tags"}:
-        post = _resolve_post(repo, cmd.args)
+        post = view.post(cmd.args)
         fields = sorted(k for k in cmd.args if k not in {"slug", "id"})
         if not fields:
             raise CommandError(f"{cmd.op} needs at least one field to change.")
-        return f"{cmd.op} on {post.slug!r} (id {post.id}): {', '.join(fields)}"
+        where = f"id {post.id}" if post.id is not None else "created earlier in this batch"
+        return f"{cmd.op} on {post.slug!r} ({where}): {', '.join(fields)}"
+
+    if cmd.op == "create_page":
+        spec = _check_create_page(view, cmd.args)
+        view.pending_pages[spec["slug"]] = spec["editor"]
+        under = f" under {spec['parent'].slug!r}" if spec["parent"] else ""
+        return (f"create {spec['status']} page {spec['slug']!r} ({spec['editor']}, "
+                f"{len(spec['text'])} chars){under}, registered in pages.config.json")
+
+    if cmd.op == "create_menu":
+        spec = _check_create_menu(view, cmd.args)
+        view.pending_menus.add(spec["position"])
+        return f"create menu {spec['name']!r} at position {spec['position']!r}"
 
     if cmd.op == "add_menu_item":
-        for required in ("position", "label", "link"):
-            if required not in cmd.args:
-                raise CommandError(f"add_menu_item needs {required!r}.")
-        return f"add {cmd.args['label']!r} to menu {cmd.args['position']!r}"
+        spec = _check_add_menu_item(view, cmd.args)
+        target = (f"page {spec['ref'].slug!r}" if spec["ref"] is not None
+                  else f"link {cmd.args['link']!r}")
+        return f"add {cmd.args['label']!r} to menu {cmd.args['position']!r} -> {target}"
 
     if cmd.op == "remove_menu_item":
         for required in ("position", "id"):

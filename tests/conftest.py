@@ -10,7 +10,7 @@ import pytest
 
 SCHEMA = """
 CREATE TABLE posts (
-    id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
     authors TEXT NOT NULL,
     slug TEXT NOT NULL,
@@ -99,7 +99,7 @@ def build_site(root: Path) -> Path:
     conn.close()
 
     (config_dir / "site.config.json").write_text(
-        json.dumps({"site": {"displayName": "Test site"}}), encoding="utf-8"
+        json.dumps({"name": "site", "displayName": "Test site", "description": "", "theme": "simple"}), encoding="utf-8"
     )
     (config_dir / "menu.config.json").write_text(
         json.dumps(
@@ -124,9 +124,25 @@ def build_site(root: Path) -> Path:
         ),
         encoding="utf-8",
     )
-    # Every is-page row must be listed here, or the integrity check warns.
+    # Every is-page row must be listed here, or the integrity check warns. The
+    # shape is Publii's own: a tree of {"id", "subpages"} objects.
     (config_dir / "pages.config.json").write_text(
-        json.dumps([{"id": 1, "parent": None}, {"id": 2, "parent": None}]), encoding="utf-8"
+        json.dumps([{"id": 1, "subpages": []}, {"id": 2, "subpages": []}]), encoding="utf-8"
+    )
+    # A brand-new Publii site writes theme.config.json as "{}" (back-end/site.js).
+    (config_dir / "theme.config.json").write_text("{}", encoding="utf-8")
+    # The active theme's own config declares the menu positions it renders.
+    theme_dir = input_dir / "themes" / "simple"
+    theme_dir.mkdir(parents=True, exist_ok=True)
+    (theme_dir / "config.json").write_text(
+        json.dumps({
+            "name": "Simple",
+            "menus": {
+                "mainMenu": {"desc": "", "name": "Main menu", "maxLevels": -1},
+                "footerMenu": {"desc": "", "name": "Footer menu", "maxLevels": 1},
+            },
+        }),
+        encoding="utf-8",
     )
     return root
 
@@ -134,3 +150,15 @@ def build_site(root: Path) -> Path:
 @pytest.fixture
 def site_root(tmp_path: Path) -> Path:
     return build_site(tmp_path / "site")
+
+
+@pytest.fixture(autouse=True)
+def publii_closed(monkeypatch):
+    """Tests run whether or not the developer has Publii open.
+
+    ``apply`` refuses while the desktop app runs; the refusal itself is tested
+    explicitly by flipping this back.
+    """
+    import publii_toolkit.agent as agent
+
+    monkeypatch.setattr(agent, "publii_is_running", lambda: False)
