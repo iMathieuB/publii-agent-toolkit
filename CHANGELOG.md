@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] — unreleased
+
+### Fixed
+
+- **Every read left a connection open on `db.sqlite` until garbage collection.** `PubliiRepository._connect_ro()` was used as `with self._connect_ro() as conn:`, but sqlite3's own context manager only ends a transaction; it never closes the connection. Each read kept a handle on the database file, which on Windows blocks renaming or replacing it, and Python 3.13+ reports each one as an unraisable exception. The defect dates from 1.0.0; the extra reads of 1.3.0 made the warnings show up in the test suite. Read connections are now closed when the block ends, and a test renames the database right after several reads to prove no handle is left.
+
 ## [1.3.0] — 2026-10-16
 
 Until now the toolkit could only change a site that already had its pages and menus. This release lets an agent build one from a brand-new Publii site: pages, menus, logo, cookie banner and front page, in one plan and one apply, while the owner keeps the three steps that are theirs (the server credentials, the first render and the first sync). The use case that drove it is a small-business owner pasting a single instruction into an AI agent and watching it put a five-page site together.

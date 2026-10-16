@@ -291,3 +291,24 @@ def test_set_tags_rejects_a_non_list(site_root):
 def test_check_passes_on_a_healthy_site(site_root):
     out = AgentSession(str(site_root)).read({"op": "check"})
     assert out["result"]["ok"], out["result"]["issues"]
+
+
+def test_reads_release_the_database_file(site_root):
+    # On Windows a file cannot be renamed while a handle is open on it, so this
+    # fails as long as a read leaves its connection for the garbage collector.
+    import gc
+    import os
+
+    from publii_toolkit.repository import PubliiRepository
+
+    gc.disable()
+    try:
+        repo = PubliiRepository.open(site_root)
+        repo.list_posts()
+        repo.check_integrity()
+        repo.content_editors()
+        db = site_root / "input" / "db.sqlite"
+        os.replace(db, db.with_name("moved.sqlite"))
+        os.replace(db.with_name("moved.sqlite"), db)
+    finally:
+        gc.enable()

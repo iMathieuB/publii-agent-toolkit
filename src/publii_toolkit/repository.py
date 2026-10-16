@@ -28,9 +28,10 @@ import shutil
 import sqlite3
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .models import (
     CoreMeta,
@@ -303,11 +304,18 @@ class PubliiRepository:
         return cls(SitePaths.from_root(site_root), **kw)
 
     # -- connections --------------------------------------------------------- #
-    def _connect_ro(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect_ro(self) -> Iterator[sqlite3.Connection]:
+        # sqlite3's own "with conn:" only ends a transaction; it never closes the
+        # connection. Every read used to leave one open until garbage collection,
+        # holding a handle on db.sqlite (Python 3.13+ warns about each of them).
         uri = f"file:{self.paths.db_path.as_posix()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     # -- reads (return validated models) ------------------------------------ #
     def list_posts(self, *, pages: bool | None = None) -> list[Post]:
