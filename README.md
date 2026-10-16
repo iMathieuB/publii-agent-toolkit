@@ -14,9 +14,11 @@ Paste this one instruction into Claude Code, Codex, or any AI agent that can run
 
 Collez cette seule consigne dans Claude Code, Codex ou tout agent IA qui peut lancer des commandes sur votre ordinateur :
 
-> Installe publii-agent-toolkit depuis https://github.com/iMathieuB/publii-agent-toolkit, lis son AGENTS.md, et demande ma permission avant chaque installation, chaque écriture et chaque publication.
+> Installez publii-agent-toolkit depuis https://github.com/iMathieuB/publii-agent-toolkit, lisez son AGENTS.md et demandez ma permission avant chaque installation, chaque écriture et chaque publication.
 
 It needs Python 3.10 or newer. If Python is missing, the agent can install it with your permission (on Windows: `winget install Python.Python.3.12`). / Il faut Python 3.10 ou plus récent ; s'il manque, l'agent peut l'installer avec votre permission (sous Windows : `winget install Python.Python.3.12`).
+
+Three ready-made skills for Claude, in French, build on this toolkit: one puts a five-page Publii site online on Cloudflare R2, one writes pages that Google and AI assistants can read, one submits the sitemap to Google and Bing. See [`skills/`](skills/README.md). / Trois skills pour Claude, en français, s'appuient sur ce toolkit : voir [`skills/`](skills/README.md).
 
 ## The safety argument
 

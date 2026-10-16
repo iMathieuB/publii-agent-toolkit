@@ -3,7 +3,15 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.3.1] — unreleased
+## [1.3.1] — 2026-10-16
+
+### Added
+
+- **`skills/`**: three skills for Claude, in French, for small-business owners in Quebec. `site-publii-cloudflare` puts a five-page Publii site online on Cloudflare R2 with this toolkit, `decouvrabilite-google-et-ia` writes a home page and service pages that search engines and AI assistants can read, and `soumission-sitemaps` checks the sitemap and walks through Google Search Console and Bing Webmaster Tools. Each is also attached as a ZIP to the GitHub release, for upload to claude.ai.
+
+### Changed
+
+- README: the French instruction now addresses the reader formally (« Installez… lisez… demandez »), like the rest of the French text.
 
 ### Fixed
 
