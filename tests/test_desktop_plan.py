@@ -93,3 +93,71 @@ def test_a_dry_run_reports_every_project_of_a_group(tmp_path):
     results = driver.sync(["netzero-fr", "netzero-en"], apply=False)
     assert {r.site for r in results} == {"netzero-fr", "netzero-en"}
     assert all(r.applied is False and r.detail == "dry run" for r in results)
+
+
+# ------------------------------------------------- a fresh, per-user install
+
+
+def test_a_per_user_install_is_found_first(tmp_path, monkeypatch):
+    """The Windows installer puts Publii under %LOCALAPPDATA%\Programs by default."""
+    from publii_toolkit.desktop import find_executable
+
+    exe = tmp_path / "Local" / "Programs" / "Publii" / "Publii.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "nowhere"))
+    monkeypatch.setenv("PROGRAMFILES(X86)", str(tmp_path / "nowhere"))
+    assert find_executable() == exe
+
+
+def test_no_install_is_a_clear_error(tmp_path, monkeypatch):
+    from publii_toolkit.desktop import find_executable
+
+    for var in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"):
+        monkeypatch.setenv(var, str(tmp_path / "nowhere"))
+    with pytest.raises(DesktopError, match="executable="):
+        find_executable()
+
+
+def test_a_fresh_site_never_synced_is_planned_and_dry_run(tmp_path):
+    """The site.config.json Publii writes for a new site: no syncDate, no advanced."""
+    config = tmp_path / "mon-site" / "input" / "config"
+    config.mkdir(parents=True)
+    (config / "site.config.json").write_text(json.dumps({
+        "uuid": "uuid-1", "name": "mon-site", "description": "", "displayName": "Mon site",
+        "author": "", "logo": {"color": 1, "icon": "web-home"}, "theme": "simple",
+    }), encoding="utf-8")
+    driver = PubliiDesktop(sites_root=tmp_path, executable=tmp_path / "Publii.exe")
+    assert driver.state("mon-site").last_sync == "never"
+    assert driver.plan(["mon-site"]) == [("Mon site", ["mon-site"])]
+    (result,) = driver.sync(["mon-site"], apply=False)
+    assert (result.site, result.applied, result.previous_sync_ms) == ("mon-site", False, None)
+
+
+class FakeElement:
+    def __init__(self, text, control_type="ListItem"):
+        self.text = text
+        self.element_info = type("Info", (), {"control_type": control_type})()
+
+    def window_text(self):
+        return self.text
+
+
+class FakeWindow:
+    def __init__(self, elements):
+        self.elements = elements
+
+    def descendants(self):
+        return self.elements
+
+
+def test_the_site_list_does_not_mistake_a_longer_name_for_the_one_requested(tmp_path, monkeypatch):
+    """Substring matching finds "Acme" inside "Acme EN"; that entry belongs to another project."""
+    import publii_toolkit.desktop as desktop
+
+    monkeypatch.setattr(desktop.time, "sleep", lambda s: None)
+    driver = make_sites(tmp_path, {"acme": "Acme", "acme-en": "Acme EN"})
+    window = FakeWindow([FakeElement("Acme EN"), FakeElement("Acme"), FakeElement("Acme", "Text")])
+    entries = driver._wait_for_entries(window, "Acme", timeout_s=1)
+    assert [e.text for e in entries] == ["Acme"]

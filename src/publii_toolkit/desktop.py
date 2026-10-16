@@ -319,18 +319,24 @@ class PubliiDesktop:
         current = self._current_site_display(window)
         if expected_matches == 1 and current == display_name:
             return
-        if current is None:
-            raise DesktopError("Could not read which site Publii currently has open.")
+        if current is not None:
+            header = self._find(window.descendants(), current, control_types=("Text",), exact=True)
+            if header is None:
+                raise DesktopError(f"Header for site {current!r} not found.")
+            header.click_input()
+        # current is None when no site is open: Publii starts on the last site
+        # opened, read from its own localStorage (src/components/App.vue), and
+        # on its site list when there is none, as after a fresh install whose
+        # profile was reset. The list is then already on screen, so it is
+        # searched directly; the selection is verified on disk-backed names below.
 
-        header = self._find(window.descendants(), current, control_types=("Text",), exact=True)
-        if header is None:
-            raise DesktopError(f"Header for site {current!r} not found.")
-        header.click_input()
-        time.sleep(2.5)
-
-        entries = self._find_all(window.descendants(), display_name,
-                                 control_types=("ListItem",))
+        entries = self._wait_for_entries(window, display_name)
         if not entries:
+            if current is None:
+                raise DesktopError(
+                    f"No site is open in Publii and {display_name!r} is not in a visible "
+                    f"site list. Open the site once in Publii, close it, and retry."
+                )
             raise DesktopError(f"Site {display_name!r} is not in the Publii list.")
         if len(entries) != expected_matches:
             raise DesktopError(
@@ -344,6 +350,26 @@ class PubliiDesktop:
 
         if self._current_site_display(window) != display_name:
             raise DesktopError(f"Selecting {display_name!r} did not take effect.")
+
+    def _wait_for_entries(self, window, display_name: str, timeout_s: int = 10) -> list:
+        """The site-list entries carrying `display_name`, polled for up to `timeout_s`.
+
+        The list can take longer than a fixed pause to appear (seen in production:
+        empty at 2.5 s, complete at 4 s). Matching is by substring, so "Acme" also
+        finds "Acme EN": an entry whose text is ANOTHER project's display name is
+        not a candidate.
+        """
+        others = set(self.display_names()) - {display_name}
+        entries: list = []
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            time.sleep(1.5)
+            entries = [e for e in self._find_all(window.descendants(), display_name,
+                                                 control_types=("ListItem",))
+                       if self._text(e) not in others]
+            if entries:
+                break
+        return entries
 
     def _click_sync(self, window) -> None:
         """The sidebar link opens a modal; the modal's button starts the sync.
