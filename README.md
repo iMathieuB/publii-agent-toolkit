@@ -6,6 +6,18 @@ Publii is a desktop static-site CMS. Its content lives in a SQLite database and 
 
 This toolkit is the layer that makes automated editing survivable. It is useful from a plain Python script, and it exists mostly because agents are now writing those scripts.
 
+## Start here / Pour commencer
+
+Paste this one instruction into Claude Code, Codex, or any AI agent that can run commands on your computer:
+
+> Install publii-agent-toolkit from https://github.com/iMathieuB/publii-agent-toolkit, read its AGENTS.md, and ask my permission before every install, every write and every publish.
+
+Collez cette seule consigne dans Claude Code, Codex ou tout agent IA qui peut lancer des commandes sur votre ordinateur :
+
+> Installe publii-agent-toolkit depuis https://github.com/iMathieuB/publii-agent-toolkit, lis son AGENTS.md, et demande ma permission avant chaque installation, chaque écriture et chaque publication.
+
+It needs Python 3.10 or newer. If Python is missing, the agent can install it with your permission (on Windows: `winget install Python.Python.3.12`). / Il faut Python 3.10 ou plus récent ; s'il manque, l'agent peut l'installer avec votre permission (sous Windows : `winget install Python.Python.3.12`).
+
 ## The safety argument
 
 An agent driving a CMS through a Python API has to be trusted not to write bad Python. An agent driving it through a fixed set of JSON commands only has to produce valid JSON, and every command it can express is one the toolkit already knows how to validate, stage and roll back.
@@ -19,6 +31,8 @@ The guarantees do not depend on the agent behaving well:
 **The whole mutable surface is backed up before any change**, to `input_backup/<timestamp>/`. Database and config together, because restoring one without the other leaves them out of step. Two changes within the same second get two folders (`<timestamp>-2`), never one overwritten.
 
 **Everything happens in one transaction.** Database changes commit or roll back as a unit, and the config files are swapped atomically with `os.replace` only after the commit succeeds.
+
+**Images are staged like the rest.** They live outside the backed-up surface, so a copied image waits under a temporary name, is moved into place just before the commit, and is deleted, along with any folder created for it, if the batch fails. An existing file is never overwritten.
 
 **A structural integrity check runs before the commit, not after.** Dangling menu links, duplicate slugs, orphaned tag rows, `mainTag` pointing at a tag that does not exist, missing tables or columns after a Publii upgrade. Any of those and the whole batch rolls back and the backup is restored.
 
@@ -112,15 +126,24 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 | `get_post` | read | `slug` or `id` |
 | `list_tags` | read | none |
 | `list_menus` | read | none |
+| `get_site_settings` | read | none; returns the settings below, the theme's menu positions and the editors in use, never a credential |
 | `check` | read | none |
+| `create_page` | write | `title`, `slug` (unique), `text`, and optionally `editor` (`tinymce` for HTML, `markdown`), `status` (`published`\|`draft`), `metaTitle`, `metaDesc`, `parent_id` or `parent` (slug) |
 | `update_post` | write | `slug`\|`id`, and one or more of `title`, `text`, `status` |
 | `update_meta` | write | `slug`\|`id`, and one or more of `metaTitle`, `metaDesc`, `metaRobots`, `canonicalUrl` |
 | `set_tags` | write | `slug`\|`id`, `tags` (list of tag slugs) |
-| `add_menu_item` | write | `position`, `label`, `link`, `type`, `parent_id` |
+| `create_menu` | write | `position` (one the theme declares, e.g. `mainMenu`), `name` |
+| `add_menu_item` | write | `position`, `label`, and `link` (post id, URL or `#`) or `page` (a page slug); `type`, `parent_id` |
 | `remove_menu_item` | write | `position`, `id` |
 | `update_menu_item` | write | `position`, `id`, and one or both of `label`, `title`; the entry keeps its place and its target |
+| `update_site_settings` | write | one or more of `site_name`, `site_description`, `logo`, `cookie_banner`, `privacy_policy_page`, `front_page`; any other key is refused |
+| `add_media` | write | `file` (local image), `target` (`logo` or `post`), `slug`\|`id` for a post, and optionally `name`, `featured`, `alt` |
 
 `publii-agent ops` returns this catalogue as JSON, which is the version to trust.
+
+A later command in a batch can refer, by slug, to a page an earlier command creates. A five-page site with its menus, logo and cookie banner is one plan and one apply, so one backup and one transaction: [AGENTS.md](AGENTS.md) has the full example.
+
+`update_site_settings` is a whitelist on purpose. `site.config.json` also holds the deployment credentials (S3 keys, FTP passwords, tokens); none of it can be changed through this tool, and nothing from that file is ever printed except the whitelisted values. Credentials, the first render and the first sync stay with the site owner, in Publii.
 
 ## Publishing without the click
 
@@ -162,7 +185,7 @@ models      pydantic schemas                     for validating a row or a confi
 
 ## Before you run it
 
-**Close Publii.** It holds the database open, and a write will fail with `site_locked` while it is running.
+**Close Publii.** `apply` refuses with `publii_running` while the app is open on Windows, and with `site_locked` if anything holds the database. Publii keeps the site's configuration in memory and writes it back when you save a setting, so a change made under it could be lost.
 
 **Never edit `output/`.** It is generated. Publii overwrites it on the next sync.
 

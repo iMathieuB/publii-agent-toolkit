@@ -3,6 +3,49 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-10-16
+
+Until now the toolkit could only change a site that already had its pages and menus. This release lets an agent build one from a brand-new Publii site: pages, menus, logo, cookie banner and front page, in one plan and one apply, while the owner keeps the three steps that are theirs (the server credentials, the first render and the first sync). The use case that drove it is a small-business owner pasting a single instruction into an AI agent and watching it put a five-page site together.
+
+Every Publii fact below was read from Publii 0.47.6 itself (`resources/app.asar`) or from live sites, and the source file is named in the code where it matters. What could not be confirmed that way is listed at the end of this entry.
+
+### Added
+
+- **`create_page`**, a JSON command over `PubliiTransaction.create_post(..., register_as_page=True)`. It writes the `posts` row, a `_core` blob with exactly the five keys Publii writes for a page, and the `pages.config.json` entry, in one transaction. The slug must be one Publii's own slug rules would keep, unique on the site, and not a folder name the URL scheme reserves. The editor matters because it decides how `text` is stored: Publii offers WYSIWYG (`tinymce`, HTML), Markdown and a block editor per page, with no site-wide default, and a new site has no page to copy the choice from. So the editor is inferred only when every existing row uses the same one, and must be given otherwise; the block editor's JSON format is refused. A `tinymce` page whose text is not HTML is refused too, since it would display as raw text.
+- **`create_menu`.** A new Publii site starts with `menu.config.json` holding `[]`, so `add_menu_item` had nothing to add to. Positions are limited to the ones the active theme declares; the menu object copies Publii's shape, `maxLevels` stored as a string as on every live site checked.
+- **`update_site_settings`**, a strict whitelist: `site_name` (`displayName`), `site_description` (`advanced.metaDescription`), `logo` (`config.logo` in `theme.config.json`; the `logo` in `site.config.json` is only the icon in Publii's own site list), `cookie_banner` (`advanced.gdpr.enabled`), `privacy_policy_page` and `front_page`. Any other key is refused, because `site.config.json` also holds the deployment credentials; only the whitelisted values are ever echoed back. Values are set inside the existing objects, so everything else round-trips untouched. On a brand-new site, which has no `advanced` object, partial objects are written: Publii deep-merges its defaults over both files when it reads them. `front_page` was not in the original request; it is there because without it a new site's root shows a blog listing instead of the home page.
+- **`add_media`** copies a local JPEG, PNG, WebP, GIF or SVG into `media/website/` (logo) or `media/posts/<id>/` (a page or post) and returns the value to store: `media/website/<file>` for the logo, `#DOMAIN_NAME#<file>` inside page text. The first bytes must match the extension, an SVG carrying script or event handlers is refused, the name must be a bare file name, and a different file is never overwritten (the same bytes again are a no-op). `featured: true` also makes it the page's featured image.
+- **`get_site_settings`**, a read: the whitelisted settings, the theme's menu positions and the editors in use, so an agent can read before it writes. No credential can reach its output.
+- **References within a batch.** Plan checks steps in order against the site plus what earlier steps would create, and write commands resolve pages through the open transaction instead of the read-only connection, which could not see uncommitted rows. A page created in step 1 can be linked from `add_menu_item` (new `page` argument, a slug) or `update_site_settings` in step 2.
+- **Media in the transaction.** Images are outside the `input/` backup, so `PubliiTransaction.stage_media()` copies them under a temporary name, moves them into place just before COMMIT (an unreferenced file is harmless, a committed reference to a missing one is not) and deletes them, with any folder it created, on abort.
+- `apply` returns the backup folder as `result.backup`. AGENTS.md always told agents to report it; nothing gave it to them.
+- `apply` refuses with `publii_running` while the Publii app is open on Windows. Publii keeps the site configuration in memory and writes it back when a setting is saved, and a config-only change never touches the database lock that was the only guard.
+- README: a first section, in English and French, with the one instruction an owner pastes into an agent. AGENTS.md: installing, asking permission, the new commands, and a worked example building a five-page site; a test runs that example as written.
+- Tests: 74 new, over the cases above, including plan writing nothing, a batch with one bad command landing nothing (rows, page tree, media), whitelist refusals, the round trip of unmodelled and credential keys, and no secret in any output.
+
+### Fixed
+
+- **Two menu entries added in one batch got the same id.** Both ids were computed from the menu file on disk, which the first entry had not reached yet. Ids now come from the menus as staged in the transaction.
+- **A failed lookup inside the transaction escaped as a traceback.** An unknown tag slug or a missing parent page raises `ValueError` in the transaction; `apply` only caught `CommandError`. Both now return `bad_command`.
+- **Nested pages were reported as unlisted.** `pages.config.json` is a tree, and the integrity check read only its top level; on sites with subpages every child page raised a warning. `register_page` also only looked for a parent at the top level.
+- **The integrity check accepted a `pages.config.json` entry without a `subpages` list**, which Publii's renderer walks unconditionally. It is now an error. The test fixture had such entries; it now has Publii's real shape, an `AUTOINCREMENT` posts table and a theme.
+- `__version__` said 1.1.0 in the 1.2.0 release.
+- Desktop: two fixes made in the Ordinata copy of the driver had not been brought back here. The site list is polled for up to 10 seconds instead of read once after 2.5 (it was seen empty at 2.5 s and complete at 4 s), and an entry whose text is another project's display name is no longer a candidate ("Acme" matched "Acme EN").
+
+### Changed
+
+- When no site is open in Publii, the desktop driver now looks for the site in the list already on screen instead of stopping. Publii opens the last site it showed, from its own localStorage, and its site list when there is none.
+- The integrity check also reports, as warnings, a cookie banner pointing at a missing page, a front page that is not a page, and a theme logo whose file is missing. Warnings rather than errors because what Publii does with each has not been verified; `update_site_settings` refuses such values outright.
+- `pytest` runs from a checkout without installing the package (`pythonpath = ["src"]`).
+
+### Not verified
+
+- No page, menu or setting written by this release has been rendered or synced by Publii yet: confirming that needs a live launch, which was not done against real sites. The rows and files copy Publii's own shapes, read from its source and from live sites, and one full batch was applied to a temporary copy of a real site, where the integrity check passed and the deployment block came back byte-identical.
+- Publii writes a `pageViewSettings` row when it saves a page; `create_page` does not. Publii's renderer falls back to defaults when the row is absent (`renderer-cache.js`), which was read in the source, not observed.
+- `add_media` does not make the responsive copies Publii creates on upload. How the default theme renders a featured image without them has not been checked; regenerating thumbnails in Publii should create them.
+- The desktop driver's path for the "no site open" start screen, and its handling of a fresh per-user install, were worked out from Publii's source and covered by tests with stand-in elements. They have not been run against a live Publii.
+- Whether Publii holds a database lock merely by being open was never established, which is why `apply` now checks for the process as well.
+
 ## [1.2.0] — 2026-10-08
 
 Four defects, each found in production use. The first two were found by driving the desktop module against six real sites instead of two, and both made it report success while leaving a site unpublished, which is the one failure mode a publishing tool must not have. The third left Publii open and the database locked after a launch that never exposed its controls. The fourth was in the repository: two transactions in the same second shared one backup folder.
