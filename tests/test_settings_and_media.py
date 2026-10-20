@@ -166,7 +166,31 @@ def test_a_fresh_site_config_gets_partial_objects(site_root):
     # defaults when it reads the file, so a partial object is what it expects.
     out = AgentSession(str(site_root)).apply([{"op": "update_site_settings", "cookie_banner": True}])
     assert out["ok"], out
-    assert site_config(site_root)["advanced"] == {"gdpr": {"enabled": True}}
+    assert site_config(site_root)["advanced"] == {"gdpr": {"enabled": True, "settingsVersion": "v2"}}
+
+
+def test_enabling_the_banner_marks_the_settings_as_current(configured_site):
+    # Without the marker, Publii opens a blocking "review your Privacy Settings"
+    # dialog at every launch, and desktop-sync cannot get past it.
+    out = AgentSession(str(configured_site)).apply([{"op": "update_site_settings", "cookie_banner": True}])
+    assert out["ok"], out
+    assert site_config(configured_site)["advanced"]["gdpr"]["settingsVersion"] == "v2"
+
+
+def test_an_existing_settings_version_is_kept(configured_site):
+    path = configured_site / "input" / "config" / "site.config.json"
+    config = site_config(configured_site)
+    config["advanced"]["gdpr"]["settingsVersion"] = "v3"
+    path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+    out = AgentSession(str(configured_site)).apply([{"op": "update_site_settings", "cookie_banner": True}])
+    assert out["ok"], out
+    assert site_config(configured_site)["advanced"]["gdpr"]["settingsVersion"] == "v3"
+
+
+def test_settings_outside_the_banner_leave_the_marker_alone(configured_site):
+    out = AgentSession(str(configured_site)).apply([{"op": "update_site_settings", "site_name": "X"}])
+    assert out["ok"], out
+    assert "settingsVersion" not in site_config(configured_site)["advanced"]["gdpr"]
 
 
 # --------------------------------------------------------------------- media

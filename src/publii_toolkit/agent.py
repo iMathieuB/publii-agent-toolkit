@@ -643,9 +643,17 @@ def _check_menu_update(args: dict) -> None:
 #                     showPrivacyPolicyLink true (render-html/helpers/gdpr.js)
 #   front_page        advanced.usePageAsFrontpage true and
 #                     advanced.pageAsFrontpage (an integer id)
+#
+# A write under advanced.gdpr also sets advanced.gdpr.settingsVersion to "v2"
+# when it is empty, as Publii's own "Save settings" does. Publii 0.40 and later
+# read an enabled banner without that marker as a pre-0.40 configuration and
+# open a "review your Privacy Settings" dialog each time the site loads; the
+# dialog covers the window, so desktop-sync cannot reach the sync button. Seen
+# on Publii 0.48.1 on 2026-10-20; 0.47.6 holds the same test.
 
 SITE_SETTINGS = ("site_name", "site_description", "logo", "cookie_banner",
                  "privacy_policy_page", "front_page")
+GDPR_SETTINGS_VERSION = "v2"
 
 
 def _check_update_site_settings(view, args: dict) -> dict:
@@ -713,13 +721,18 @@ def _check_update_site_settings(view, args: dict) -> dict:
 
 def _op_update_site_settings(repo: PubliiRepository, tx, args: dict) -> Any:
     """Change whitelisted site settings only. args, one or more of: site_name, site_description (default meta description), logo (value returned by add_media target 'logo', or ''), cookie_banner (true/false, Publii's GDPR banner), privacy_policy_page (page slug or id the banner links to), front_page (page slug or id served at the site root). Any other key is refused."""
-    spec = _check_update_site_settings(_ApplyView(repo, tx), args)
+    view = _ApplyView(repo, tx)
+    spec = _check_update_site_settings(view, args)
     site = dict(spec["site"])
     refs = spec["refs"]
     if "privacy_policy_page" in refs:
         site[("advanced", "gdpr", "privacyPolicyPostId")] = refs["privacy_policy_page"].id
         site[("advanced", "gdpr", "privacyPolicyLinkType")] = "internal"
         site[("advanced", "gdpr", "showPrivacyPolicyLink")] = True
+    if any(path[:2] == ("advanced", "gdpr") for path in site):
+        gdpr = (view.site_config().get("advanced") or {}).get("gdpr") or {}
+        if not gdpr.get("settingsVersion"):
+            site[("advanced", "gdpr", "settingsVersion")] = GDPR_SETTINGS_VERSION
     if "front_page" in refs:
         site[("advanced", "usePageAsFrontpage")] = True
         site[("advanced", "pageAsFrontpage")] = refs["front_page"].id

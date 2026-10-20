@@ -47,10 +47,10 @@ The worst outcome of a confused agent is a refused command and a log line.
 The package is not on PyPI. Install it from GitHub:
 
 ```bash
-pip install "git+https://github.com/iMathieuB/publii-agent-toolkit.git"
+pip install "publii-agent-toolkit @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
 ```
 
-Python 3.10 or newer. The only dependency is pydantic.
+Python 3.10 or newer. The only dependency is pydantic. The `.zip` address needs no Git; `git+https://github.com/iMathieuB/publii-agent-toolkit.git` works too where Git is installed.
 
 ## Use from the command line
 
@@ -152,7 +152,8 @@ A later command in a batch can refer, by slug, to a page an earlier command crea
 Publii has no CLI. Rendering and syncing are interface actions, which leaves a human pressing a button in the middle of an otherwise scriptable pipeline. The `desktop` module drives the application itself, on Windows.
 
 ```bash
-pip install "publii-agent-toolkit[desktop] @ git+https://github.com/iMathieuB/publii-agent-toolkit.git"
+pip install "publii-agent-toolkit[desktop] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
+python -c "import pywinauto"   # "DLL load failed": install the Microsoft Visual C++ Redistributable
 
 publii-agent desktop-status
 publii-agent desktop-sync --name my-site                     # dry run
@@ -166,6 +167,8 @@ Publii is an Electron application, and Chromium only builds its accessibility tr
 Success comes from disk, not from the click. Publii writes `syncDate` into `input/config/site.config.json` when a sync completes, so the driver reads that value before and after and only reports success when it changes. A click that silently fails is detected instead of assumed to have worked — which matters, because the sidebar link and the confirmation modal's button carry the *identical* label, "Sync your website", separated only by control type. Clicking the wrong one reopens the modal and publishes nothing.
 
 A sync publishes to the live site, and the backups this toolkit takes protect `input/` — they do not undo a publication. So `--apply` is required, any element labelled "delete" is refused outright (the site list puts a "Delete website" link beside every entry), and the selected site is re-checked immediately before publishing.
+
+One Publii dialog would stop the driver, so the driver looks for its cause before launching Publii. When a site's cookie banner is enabled without `advanced.gdpr.settingsVersion`, Publii opens "We've made significant changes to the Privacy Settings" each time the site loads, right over the sync button. `desktop-sync` refuses such a site, dry run included, and says how to clear it: save the site settings once in Publii. Since 1.3.3, `update_site_settings` writes the marker itself.
 
 ## Layers
 

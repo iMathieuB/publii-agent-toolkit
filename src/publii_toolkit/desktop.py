@@ -69,8 +69,17 @@ SYNC_DONE_TEXTS = (
     "Your website is now in sync",
     "All files have been successfully uploaded to your server.",
 )
-MODAL_ACK_TEXT = "OK"
 FORBIDDEN_CLICK_TEXTS = ("delete", "supprimer")
+# Publii 0.48.1 (seen 2026-10-20) turned three controls of 0.47.6 into buttons
+# or renamed them; both forms are accepted.
+# The site name at the top of the sidebar: a Text, then a Button. Missing it
+# reads as "no site open" and stops the sync.
+SITE_HEADER_TYPES = ("Text", "Button")
+# The modal's own "Sync your website": a Text, then a Button. Never a Hyperlink,
+# which is what keeps it apart from the sidebar link of the same label.
+SYNC_CONFIRM_TYPES = ("Text", "Button")
+# What closes the success modal: "OK", then "Close" beside "Visit your website".
+MODAL_ACK_TEXTS = ("OK", "Close")
 
 TREE_READY_MIN_ELEMENTS = 40
 TREE_TIMEOUT_S = 60
@@ -192,6 +201,17 @@ class PubliiDesktop:
             directories.sort()
         return groups
 
+    def privacy_review_pending(self, site: str) -> bool:
+        """True when Publii will stop on its "review your Privacy Settings" dialog.
+
+        Publii 0.40 and later open that dialog whenever a site loads with its
+        cookie banner enabled and no ``advanced.gdpr.settingsVersion``. It
+        covers the window, the sync button included, until someone saves the
+        site settings in Publii.
+        """
+        gdpr = (self.read_config(site).get("advanced") or {}).get("gdpr") or {}
+        return bool(gdpr.get("enabled")) and not gdpr.get("settingsVersion")
+
     def display_names(self) -> dict[str, str]:
         """Display name -> one directory. Only used to test whether a name is known."""
         return {name: directories[0]
@@ -295,7 +315,7 @@ class PubliiDesktop:
         known = set(self.display_names())
         for element in window.descendants():
             try:
-                if element.element_info.control_type != "Text":
+                if element.element_info.control_type not in SITE_HEADER_TYPES:
                     continue
             except Exception:
                 continue
@@ -320,7 +340,7 @@ class PubliiDesktop:
         if expected_matches == 1 and current == display_name:
             return
         if current is not None:
-            header = self._find(window.descendants(), current, control_types=("Text",), exact=True)
+            header = self._find(window.descendants(), current, control_types=SITE_HEADER_TYPES, exact=True)
             if header is None:
                 raise DesktopError(f"Header for site {current!r} not found.")
             header.click_input()
@@ -389,15 +409,22 @@ class PubliiDesktop:
         self._safe_click(link, SYNC_LINK_TEXT)
 
         deadline = time.time() + MODAL_TIMEOUT_S
+        title_seen = False
         while time.time() < deadline:
             time.sleep(1.5)
             children = window.descendants()
             if self._find(children, SYNC_MODAL_TITLE, control_types=("Text",), exact=True) is None:
                 continue
-            confirm = self._find(children, SYNC_LINK_TEXT, control_types=("Text",), exact=True)
+            title_seen = True
+            confirm = self._find(children, SYNC_LINK_TEXT, control_types=SYNC_CONFIRM_TYPES, exact=True)
             if confirm is not None:
                 self._safe_click(confirm, SYNC_LINK_TEXT)
                 return
+        if title_seen:
+            raise DesktopError(
+                f"The {SYNC_MODAL_TITLE!r} modal opened without a {SYNC_LINK_TEXT!r} "
+                f"button this module recognises. Nothing was published."
+            )
         raise DesktopError(f"The {SYNC_MODAL_TITLE!r} modal never appeared.")
 
     def _dismiss_sync_modal(self, window, timeout_s: int = 30) -> bool:
@@ -409,24 +436,25 @@ class PubliiDesktop:
         launch - the second fails with "site is not in the Publii list", which
         looks like a selection problem and is not one.
 
-        Two conditions before clicking, because "OK" is too ordinary a label to
-        trust on its own: either one of the known success-modal strings is
-        present, or the sidebar sync link has vanished from the tree, which is
-        proof that a modal is covering the interface. Otherwise nothing is
-        clicked and the next step is left to fail loudly.
+        Two conditions before clicking, because "OK" and "Close" are too
+        ordinary to trust on their own: either one of the known success-modal
+        strings is present, or the sidebar sync link has vanished from the
+        tree, which is proof that a modal is covering the interface. Otherwise
+        nothing is clicked and the next step is left to fail loudly.
         """
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             children = window.descendants()
-            ack = self._find(children, MODAL_ACK_TEXT,
-                             control_types=("Text", "Button"), exact=True)
-            if ack is not None:
+            for label in MODAL_ACK_TEXTS:
+                ack = self._find(children, label, control_types=("Text", "Button"), exact=True)
+                if ack is None:
+                    continue
                 known = any(self._find(children, text, control_types=("Text",), exact=True)
                             for text in SYNC_DONE_TEXTS)
                 covered = self._find(children, SYNC_LINK_TEXT,
                                      control_types=("Hyperlink",), exact=True) is None
                 if known or covered:
-                    self._safe_click(ack, MODAL_ACK_TEXT)
+                    self._safe_click(ack, label)
                     time.sleep(2)
                     return True
             time.sleep(1.5)
@@ -495,6 +523,16 @@ class PubliiDesktop:
                     )
             ordered.append((name, list(siblings)))
             seen.update(siblings)
+
+        blocked = [d for _, directories in ordered for d in directories
+                   if self.privacy_review_pending(d)]
+        if blocked:
+            raise DesktopError(
+                f"Publii will open its 'review your Privacy Settings' dialog as soon as "
+                f"{', '.join(blocked)} loads, and that dialog covers the sync button. "
+                f"Open the site in Publii, go to Site settings, click Save settings once, "
+                f"close Publii, then run this again."
+            )
         return ordered
 
     def _sync_group(self, window, display_name: str,

@@ -8,9 +8,11 @@ Ask the user before each install. Then:
 
 ```bash
 python --version        # needs 3.10 or newer
-pip install "publii-agent-toolkit[desktop] @ git+https://github.com/iMathieuB/publii-agent-toolkit.git"
+pip install "publii-agent-toolkit[desktop] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
 publii-agent ops        # proves the install; lists every command
 ```
+
+The `.zip` address needs no Git; a `git+https://` address fails on a machine without Git, which is the usual state of a fresh Windows. On Windows, check `python -c "import pywinauto"` before the first publish: on a machine without the Microsoft Visual C++ Redistributable it fails with "DLL load failed while importing win32ui", and `winget install Microsoft.VCRedist.2015+.x64` fixes it (ask first; Windows asks for elevation). A terminal that was open before winget installed Python does not see it on PATH: call `%LOCALAPPDATA%\Programs\Python\Python312\python.exe` by its full path.
 
 If Python is missing or too old on Windows, propose `winget install Python.Python.3.12` and wait for a yes. If `publii-agent` is not found after the install (pip put it in a Scripts folder that is not on PATH), use `python -m publii_toolkit.cli` instead, with the same arguments. The `[desktop]` extra is Windows only and is what publishing needs; leave it out elsewhere.
 

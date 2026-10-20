@@ -135,6 +135,21 @@ def test_a_fresh_site_never_synced_is_planned_and_dry_run(tmp_path):
     assert (result.site, result.applied, result.previous_sync_ms) == ("mon-site", False, None)
 
 
+def test_a_banner_publii_will_ask_to_review_is_refused_before_launch(tmp_path):
+    """Publii would stop on its Privacy Settings dialog, which covers the sync button."""
+    driver = make_sites(tmp_path, {"atelier": "Atelier"})
+    path = tmp_path / "atelier" / "input" / "config" / "site.config.json"
+    config = json.loads(path.read_text(encoding="utf-8"))
+    config["advanced"] = {"gdpr": {"enabled": True, "settingsVersion": ""}}
+    path.write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(DesktopError, match="Save settings"):
+        driver.plan(["atelier"])
+
+    config["advanced"]["gdpr"]["settingsVersion"] = "v2"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    assert driver.plan(["atelier"]) == [("Atelier", ["atelier"])]
+
+
 class FakeElement:
     def __init__(self, text, control_type="ListItem"):
         self.text = text
@@ -161,3 +176,81 @@ def test_the_site_list_does_not_mistake_a_longer_name_for_the_one_requested(tmp_
     window = FakeWindow([FakeElement("Acme EN"), FakeElement("Acme"), FakeElement("Acme", "Text")])
     entries = driver._wait_for_entries(window, "Acme", timeout_s=1)
     assert [e.text for e in entries] == ["Acme"]
+
+
+@pytest.mark.parametrize("header_type", ["Text", "Button"])
+def test_the_open_site_is_read_from_the_header_in_either_publii_version(tmp_path, header_type):
+    """Publii 0.47.6 shows the open site's name as a Text, 0.48.1 as a Button."""
+    driver = make_sites(tmp_path, {"atelier": "Atelier Essai"})
+    window = FakeWindow([FakeElement("Open application menu", "Button"),
+                         FakeElement("Atelier Essai", header_type),
+                         FakeElement("Pages", "Hyperlink")])
+    assert driver._current_site_display(window) == "Atelier Essai"
+
+
+class ClickableElement(FakeElement):
+    def __init__(self, text, control_type, clicks):
+        super().__init__(text, control_type)
+        self.clicks = clicks
+
+    def click_input(self):
+        self.clicks.append((self.text, self.element_info.control_type))
+
+
+class FocusWindow(FakeWindow):
+    def set_focus(self):
+        pass
+
+
+@pytest.mark.parametrize("confirm_type", ["Text", "Button"])
+def test_the_modal_button_is_clicked_never_the_sidebar_link_twice(tmp_path, monkeypatch, confirm_type):
+    """0.47.6 exposes the modal's "Sync your website" as a Text, 0.48.1 as a Button."""
+    import publii_toolkit.desktop as desktop
+
+    monkeypatch.setattr(desktop.time, "sleep", lambda s: None)
+    driver = make_sites(tmp_path, {"atelier": "Atelier Essai"})
+    clicks = []
+    window = FocusWindow([
+        ClickableElement("Sync your website", "Hyperlink", clicks),
+        FakeElement("Website synchronisation", "Text"),
+        ClickableElement("Sync your website", confirm_type, clicks),
+    ])
+    driver._click_sync(window)
+    assert clicks == [("Sync your website", "Hyperlink"), ("Sync your website", confirm_type)]
+
+
+@pytest.mark.parametrize("label", ["OK", "Close"])
+def test_the_success_modal_is_closed_in_either_publii_version(tmp_path, monkeypatch, label):
+    import publii_toolkit.desktop as desktop
+
+    monkeypatch.setattr(desktop.time, "sleep", lambda s: None)
+    driver = make_sites(tmp_path, {"atelier": "Atelier Essai"})
+    clicks = []
+    window = FocusWindow([
+        FakeElement("Your website is now in sync", "Text"),
+        ClickableElement("Visit your website", "Button", clicks),
+        ClickableElement(label, "Button", clicks),
+    ])
+    assert driver._dismiss_sync_modal(window, timeout_s=1) is True
+    assert clicks == [(label, "Button")]
+
+
+def test_a_lone_close_button_is_not_clicked(tmp_path, monkeypatch):
+    """No success text and the sidebar link still visible: this Close is not the modal's."""
+    import publii_toolkit.desktop as desktop
+
+    monkeypatch.setattr(desktop.time, "sleep", lambda s: None)
+    driver = make_sites(tmp_path, {"atelier": "Atelier Essai"})
+    clicks = []
+    window = FocusWindow([
+        ClickableElement("Sync your website", "Hyperlink", clicks),
+        ClickableElement("Close", "Button", clicks),
+    ])
+    assert driver._dismiss_sync_modal(window, timeout_s=0.2) is False
+    assert clicks == []
+
+
+def test_a_name_in_some_other_control_is_not_taken_for_the_open_site(tmp_path):
+    driver = make_sites(tmp_path, {"atelier": "Atelier Essai"})
+    window = FakeWindow([FakeElement("Atelier Essai", "Hyperlink"), FakeElement("Pages", "Hyperlink")])
+    assert driver._current_site_display(window) is None

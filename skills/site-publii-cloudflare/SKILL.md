@@ -26,10 +26,18 @@ Suivez la section « Installing » d'`AGENTS.md` du toolkit, à chaque étape av
 
 ```bash
 python --version        # 3.10 ou plus récent ; sinon, sous Windows : winget install Python.Python.3.12
-pip install "publii-agent-toolkit[desktop] @ git+https://github.com/iMathieuB/publii-agent-toolkit.git"
+pip install "publii-agent-toolkit[desktop] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
+python -c "import pywinauto"    # Windows : si « DLL load failed », winget install Microsoft.VCRedist.2015+.x64
 publii-agent ops
 publii-agent desktop-status
 ```
+
+Ce qu'un Windows neuf réserve (constaté le 20 octobre 2026 dans une machine virtuelle vierge) :
+
+- `python` peut n'être qu'un raccourci vers le Microsoft Store, qui n'installe rien. Si `python --version` ne répond pas par un numéro de version, proposez winget.
+- Un terminal déjà ouvert, comme le vôtre, ne voit pas le Python que winget vient d'installer. Appelez-le par son chemin complet, `%LOCALAPPDATA%\Programs\Python\Python312\python.exe` (avec `-m pip` pour pip), et `publii-agent` par `%LOCALAPPDATA%\Programs\Python\Python312\Scripts\publii-agent.exe`.
+- L'adresse en `.zip` installe le toolkit sans Git. Une adresse `git+https://` échoue quand Git n'est pas installé.
+- La publication (`desktop-sync`) passe par pywinauto, qui a besoin du Visual C++ Redistributable de Microsoft. Si `python -c "import pywinauto"` répond « DLL load failed », installez-le avec winget, avec la permission de la personne (Windows demande une confirmation).
 
 `desktop-status` liste les sites Publii trouvés. Demandez à la personne lequel est le bon et retenez son dossier, celui qui contient `input/` : c'est la valeur de `--site`. Lisez `AGENTS.md` en entier avant la première écriture.
 
@@ -53,19 +61,20 @@ Dans l'ordre, en montrant chaque opération avant de la lancer :
 
 ## 3. Ce que la personne colle dans Publii
 
-Donnez-lui cette liste, puis attendez qu'elle vous dise que c'est fait. Les libellés de Publii sont à lire à l'écran ; ceux-ci en donnent le sens.
+Donnez-lui cette liste, puis attendez qu'elle vous dise que c'est fait. Les libellés sont ceux de Publii 0.48.1 (relevés le 20 octobre 2026) ; une autre version peut les formuler autrement.
 
-| Réglage du serveur dans Publii | Valeur |
+| Dans Publii, Server | Valeur |
 |---|---|
-| Protocole | Amazon S3 |
-| Fournisseur S3 personnalisé | coché |
-| Point de terminaison | `https://<ID DU COMPTE>.r2.cloudflarestorage.com` |
-| Clé d'accès (ID) et clé secrète | celles de l'étape 2.5 |
+| Type de serveur | S3 compatible storage |
+| Website URL | `https://` puis le domaine |
+| Use a custom S3 provider | activé (l'interrupteur à gauche du libellé) |
+| S3 Provider endpoint | `https://<ID DU COMPTE>.r2.cloudflarestorage.com` |
+| Access ID et Secret key | ceux de l'étape 2.5 |
 | Bucket | le nom créé à l'étape 2.2 |
-| Région | `auto` |
-| Adresse du site | `https://<domaine>/` |
+| Region | `auto` |
+| Prefix, Cache-Control, ACL | laisser les valeurs proposées (ACL : Public read) |
 
-Ensuite, dans Publii : enregistrer, aperçu du site (premier rendu), puis « Sync your website » et le bouton du même nom dans la fenêtre qui s'ouvre. Quand la synchro est finie, la personne **ferme Publii** et vous le dit.
+Publii masque les deux clés par des points une fois tapées. Ensuite, dans Publii : Save settings, aperçu du site (premier rendu), puis « Sync your website » et le bouton du même nom dans la fenêtre qui s'ouvre. Quand la synchro est finie, la personne **ferme Publii** et vous le dit.
 
 ## 4. Vérifier la mise en ligne
 
@@ -97,6 +106,7 @@ Dites à la personne : les adresses en ligne, ce qui a été créé, le chemin d
 ## Pièges connus
 
 - `publii_running` ou `site_locked` : Publii est ouvert. Demandez de le fermer ; ne réessayez pas en boucle.
+- `desktop-sync` refuse un site parce que Publii ouvrirait sa fenêtre « We've made significant changes to the Privacy Settings » : c'est qu'un toolkit antérieur à la 1.3.3 a activé le bandeau de témoins. Demandez à la personne d'ouvrir le site dans Publii, d'aller dans Site settings, de cliquer Save settings une fois, puis de fermer Publii.
 - Images ajoutées par le toolkit : Publii n'en fabrique pas les copies réduites ; la personne régénère les miniatures dans Publii si une image s'affiche mal.
 - Les textes du bandeau de témoins restent ceux de Publii ; la personne les traduit dans les réglages du site si le thème les affiche en anglais.
 - Une synchro publie pour vrai : la sauvegarde du toolkit protège le site sur l'ordinateur, elle n'annule pas une publication.

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] — 2026-10-20
+
+Found by running the five-page example end to end on a fresh Windows 11 virtual machine, with Publii 0.48.1, the version getpublii.com now offers: install without Git, build with one plan and one apply, then `desktop-sync --apply` to an S3 endpoint (a local S3 emulator standing in for Cloudflare R2, so nothing went online).
+
+### Fixed
+
+- **Enabling the cookie banner made Publii stop on a dialog at every launch, which blocked `desktop-sync`.** Publii 0.40 and later read an enabled banner without `advanced.gdpr.settingsVersion` as a pre-0.40 configuration and open "We've made significant changes to the Privacy Settings (formerly GDPR) section" each time the site loads; the dialog covers the window until someone saves the site settings in Publii. `update_site_settings` set `advanced.gdpr.enabled` and left the marker empty, so a site built from the AGENTS.md example could not be published by `desktop-sync`. It now also writes `settingsVersion: "v2"` when it changes anything under `advanced.gdpr` and the marker is empty, which is what Publii's own "Save settings" writes; an existing value is kept. The test is the same in Publii 0.47.6 and 0.48.1 (`resources/app.asar`), so the defect dates from 1.3.0.
+- **`desktop-sync` now refuses such a site before launching Publii**, dry run included, with the way out: open Site settings in Publii and click Save settings once. Sites written by 1.3.0 to 1.3.2 are the ones that need it.
+- **`desktop-sync` could not publish with Publii 0.48.1.** Three controls changed since 0.47.6, the version the driver was built on: the site name at the top of the sidebar is now a Button (it was a Text, so the driver concluded no site was open), the modal's own "Sync your website" is now a Button (it was a Text, so the driver reported that the modal never appeared), and the success modal closes with "Close" instead of "OK". Each is now accepted in both forms, with the same guards as before: the modal's button is never a Hyperlink, which keeps it apart from the sidebar link of the same label, and "Close" is clicked only beside a known success message or over a covered sidebar. When the modal opens without a recognisable button, the error now says so instead of claiming it never opened. Nothing was published by the failed attempts: success is still read from `syncDate` on disk.
+
+### Changed
+
+- Install instructions use the GitHub `.zip` address instead of `git+https://`, which fails on a machine without Git, the usual state of a fresh Windows. AGENTS.md and the `site-publii-cloudflare` skill also cover the Microsoft Visual C++ Redistributable that pywinauto needs ("DLL load failed while importing win32ui" without it), the Microsoft Store stand-in that answers to `python` on a fresh Windows, and the terminal that does not see a Python installed after it was opened.
+
 ## [1.3.2] — 2026-10-20
 
 No code changes: the Python package is the same as 1.3.1 apart from its version number.
