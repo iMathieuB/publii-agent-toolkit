@@ -1,0 +1,20 @@
+# Gabarit : remplacer chaque <...> avant le déploiement. Le secret Turnstile ne va jamais ici :
+#   npx wrangler secret put TURNSTILE_SECRET
+name = "formulaire-<domaine-avec-tirets>"
+main = "worker.js"
+compatibility_date = "<date du jour, AAAA-MM-JJ>"
+workers_dev = false
+
+routes = [
+  { pattern = "<domaine>/api/inscription", zone_name = "<domaine>" }
+]
+
+[vars]
+DESTINATION = "<adresse qui reçoit les inscriptions>"
+EXPEDITEUR = "formulaire@<domaine>"
+PAGE_MERCI = "/merci/"
+ORIGINE = "https://<domaine>"
+
+[[send_email]]
+name = "EMAIL"
+destination_address = "<adresse qui reçoit les inscriptions>"

@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] — 2026-10-20
+
+No code changes: the Python package is the same as 1.3.1 apart from its version number.
+
+### Added
+
+- **`skills/formulaire-contact-cloudflare`**: adds a contact or waiting-list form to a static site hosted on Cloudflare, such as a Publii site on R2. A small Worker receives the form, checks the Turnstile token and emails each message to a verified destination address of the account, which Cloudflare's pricing page lists as free on every plan; the Worker keeps no copy. The skill also updates the privacy policy. `assets/` holds the Worker, a `wrangler.toml` template and the form fragment. It was tried on a real domain on 2026-10-20: the template deployed as is, the route answered before the site served on the same hostname (a Worker stood in for the site), and the first message landed in the spam folder, which the skill now warns about. Also attached as a ZIP to the GitHub release.
+
 ## [1.3.1] — 2026-10-16
 
 ### Added

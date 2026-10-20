@@ -18,7 +18,7 @@ Collez cette seule consigne dans Claude Code, Codex ou tout agent IA qui peut la
 
 It needs Python 3.10 or newer. If Python is missing, the agent can install it with your permission (on Windows: `winget install Python.Python.3.12`). / Il faut Python 3.10 ou plus récent ; s'il manque, l'agent peut l'installer avec votre permission (sous Windows : `winget install Python.Python.3.12`).
 
-Three ready-made skills for Claude, in French, build on this toolkit: one puts a five-page Publii site online on Cloudflare R2, one writes pages that Google and AI assistants can read, one submits the sitemap to Google and Bing. See [`skills/`](skills/README.md). / Trois skills pour Claude, en français, s'appuient sur ce toolkit : voir [`skills/`](skills/README.md).
+Four ready-made skills for Claude, in French, go with this toolkit: one puts a five-page Publii site online on Cloudflare R2, one adds a contact form that emails each message through Cloudflare, one writes pages that Google and AI assistants can read, one submits the sitemap to Google and Bing. See [`skills/`](skills/README.md). / Quatre skills pour Claude, en français, accompagnent ce toolkit : voir [`skills/`](skills/README.md).
 
 ## The safety argument
 
