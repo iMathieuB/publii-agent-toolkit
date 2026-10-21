@@ -301,3 +301,109 @@ def test_media_for_a_page_created_in_the_same_batch(site_root, images):
     assert out["ok"], out
     new_id = out["result"]["applied"][0]["result"]["id"]
     assert (site_root / "input" / "media" / "posts" / str(new_id) / "equipe.png").is_file()
+
+
+# ------------------------------------------------------------- S3 server settings
+
+R2_ENDPOINT = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com"
+
+
+@pytest.fixture
+def fresh_site(site_root: Path) -> Path:
+    """A site whose server was never configured, as Publii leaves a new one."""
+    config = site_root / "input" / "config"
+    (config / "site.config.json").write_text(json.dumps({
+        "uuid": "uuid-2", "name": "site", "displayName": "Test site", "domain": "",
+        "advanced": {"metaDescription": ""},
+        "deployment": {"protocol": "", "relativeUrls": False,
+                       "s3": {"id": "", "key": "", "bucket": "", "acl": "public-read"},
+                       "git": {"url": "", "commitMessage": "Publii: update content"}},
+        "theme": "simple",
+    }, indent=4), encoding="utf-8")
+    return site_root
+
+
+def test_s3_settings_are_written_as_publii_writes_them(fresh_site):
+    out = AgentSession(str(fresh_site)).apply([{
+        "op": "set_s3_deployment", "website_url": "IAauBureau.com",
+        "endpoint": R2_ENDPOINT + "/", "bucket": "iaaubureau-com",
+    }])
+    assert out["ok"], out
+
+    after = site_config(fresh_site)
+    assert after["domain"] == "https://iaaubureau.com"
+    s3 = after["deployment"]["s3"]
+    assert after["deployment"]["protocol"] == "s3"
+    assert (s3["customProvider"], s3["provider"], s3["endpoint"], s3["bucket"],
+            s3["region"], s3["customRegion"]) == (True, "custom", R2_ENDPOINT, "iaaubureau-com", "", "auto")
+    # The keys stay empty for the owner to paste, and nothing else moves.
+    assert (s3["id"], s3["key"], s3["acl"]) == ("", "", "public-read")
+    assert after["deployment"]["git"] == {"url": "", "commitMessage": "Publii: update content"}
+    assert after["deployment"]["relativeUrls"] is False
+
+    summary = AgentSession(str(fresh_site)).read({"op": "get_site_settings"})["result"]["deployment"]
+    assert summary == {"protocol": "s3", "website_url": "https://iaaubureau.com", "endpoint": R2_ENDPOINT,
+                       "bucket": "iaaubureau-com", "region": "auto", "keys_set": False}
+    assert AgentSession(str(fresh_site)).read({"op": "check"})["result"]["issues"] == []
+
+
+def test_s3_keys_already_pasted_are_kept_and_never_shown(configured_site):
+    session = AgentSession(str(configured_site))
+    batch = [{"op": "set_s3_deployment", "website_url": "example.com",
+              "endpoint": R2_ENDPOINT, "bucket": "example-com"}]
+    outputs = [session.plan(batch), session.apply(batch), session.read({"op": "get_site_settings"})]
+    assert all(o["ok"] for o in outputs), outputs
+    for o in outputs:
+        assert SECRET not in json.dumps(o), o
+
+    s3 = site_config(configured_site)["deployment"]["s3"]
+    assert (s3["id"], s3["key"]) == (SECRET, SECRET)
+    assert site_config(configured_site)["deployment"]["password"] == SECRET
+    assert outputs[2]["result"]["deployment"]["keys_set"] is True
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": "AKIA"},                                          # the keys are the owner's to paste
+    {"key": "x"},
+    {"secret_access_key": "x"},
+    {"acl": "private"},
+    {"_drop": "bucket"},
+    {"_drop": "website_url"},
+    {"_drop": "endpoint"},
+    {"endpoint": "http://0123.r2.cloudflarestorage.com"},     # not https
+    {"endpoint": R2_ENDPOINT + "/example-com"},              # bucket inside the endpoint
+    {"endpoint": "https://user:pw@example.com"},
+    {"endpoint": "https://example.com:8443"},
+    {"website_url": "https://example.com/blog"},
+    {"website_url": "not a host"},
+    {"website_url": "ftp://example.com"},
+    {"bucket": "Bad_Bucket"},
+    {"bucket": "a..b"},
+    {"region": "AUTO!"},
+])
+def test_bad_s3_settings_are_refused(fresh_site, bad):
+    args = {"website_url": "example.com", "endpoint": R2_ENDPOINT, "bucket": "example-com"}
+    args.update(bad)
+    args.pop(args.pop("_drop", None), None)
+    before = (fresh_site / "input" / "config" / "site.config.json").read_bytes()
+    session = AgentSession(str(fresh_site))
+    assert not session.plan([{"op": "set_s3_deployment", **args}])["ok"], bad
+    assert not session.apply([{"op": "set_s3_deployment", **args}])["ok"], bad
+    assert (fresh_site / "input" / "config" / "site.config.json").read_bytes() == before
+
+
+def test_another_server_type_is_left_to_the_owner(fresh_site):
+    path = fresh_site / "input" / "config" / "site.config.json"
+    data = json.loads(path.read_text("utf-8"))
+    data["deployment"]["protocol"] = "sftp"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    out = AgentSession(str(fresh_site)).apply([{
+        "op": "set_s3_deployment", "website_url": "example.com",
+        "endpoint": R2_ENDPOINT, "bucket": "example-com"}])
+    assert not out["ok"]
+    assert "sftp" in json.dumps(out)
+    assert site_config(fresh_site)["deployment"]["protocol"] == "sftp"
+
+
+def test_the_catalogue_lists_set_s3_deployment():
+    assert "set_s3_deployment" in describe_operations()["write"]

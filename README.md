@@ -128,7 +128,7 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 | `get_post` | read | `slug` or `id` |
 | `list_tags` | read | none |
 | `list_menus` | read | none |
-| `get_site_settings` | read | none; returns the settings below, the theme's menu positions and the editors in use, never a credential |
+| `get_site_settings` | read | none; returns the settings below, where the server settings point (with `keys_set`, a yes or no), the theme's menu positions and the editors in use, never a credential |
 | `check` | read | none |
 | `create_page` | write | `title`, `slug` (unique), `text`, and optionally `editor` (`tinymce` for HTML, `markdown`), `status` (`published`\|`draft`), `metaTitle`, `metaDesc`, `parent_id` or `parent` (slug) |
 | `update_post` | write | `slug`\|`id`, and one or more of `title`, `text`, `status` |
@@ -139,13 +139,14 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 | `remove_menu_item` | write | `position`, `id` |
 | `update_menu_item` | write | `position`, `id`, and one or both of `label`, `title`; the entry keeps its place and its target |
 | `update_site_settings` | write | one or more of `site_name`, `site_description`, `logo`, `cookie_banner`, `privacy_policy_page`, `front_page`; any other key is refused |
+| `set_s3_deployment` | write | `website_url`, `endpoint` (without the bucket), `bucket`, and optionally `region` (default `auto`); the Access ID and the Secret key are refused |
 | `add_media` | write | `file` (local image), `target` (`logo` or `post`), `slug`\|`id` for a post, and optionally `name`, `featured`, `alt` |
 
 `publii-agent ops` returns this catalogue as JSON, which is the version to trust.
 
 A later command in a batch can refer, by slug, to a page an earlier command creates. A five-page site with its menus, logo and cookie banner is one plan and one apply, so one backup and one transaction: [AGENTS.md](AGENTS.md) has the full example.
 
-`update_site_settings` is a whitelist on purpose. `site.config.json` also holds the deployment credentials (S3 keys, FTP passwords, tokens); none of it can be changed through this tool, and nothing from that file is ever printed except the whitelisted values. Credentials, the first render and the first sync stay with the site owner, in Publii.
+`update_site_settings` is a whitelist on purpose. `site.config.json` also holds the deployment credentials (S3 keys, FTP passwords, tokens); none of it can be changed through this tool, and nothing from that file is ever printed except the whitelisted values. `set_s3_deployment` is the one exception, and a narrow one: it fills the S3 server settings an agent already knows after preparing the bucket (address, endpoint, bucket, region) and refuses the two keys. The keys, the first render and the first sync stay with the site owner, in Publii.
 
 ## Publishing without the click
 

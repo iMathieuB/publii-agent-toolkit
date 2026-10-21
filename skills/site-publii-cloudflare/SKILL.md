@@ -17,8 +17,9 @@ Ce que vous ne faites jamais : lire, afficher ou recopier un secret (clé S3, mo
 
 1. Installer Publii (getpublii.com) et y créer le site : nom du site, auteur, thème proposé par défaut.
 2. Avoir un compte Cloudflare où le domaine est déjà une zone active (domaine acheté chez Cloudflare, ou transféré). Le domaine doit être dans le **même compte** que le bucket R2 (developers.cloudflare.com/r2/buckets/public-buckets/).
-3. Activer R2 dans le tableau de bord de Cloudflare si ce n'est pas fait : Cloudflare demande un moyen de paiement, même pour rester dans le forfait gratuit [à vérifier dans le compte : libellé exact de l'écran d'activation].
-4. Coller les valeurs S3 dans Publii, lancer le premier rendu et la première synchro (étape 4).
+3. Activer R2 dans le tableau de bord de Cloudflare si ce n'est pas fait : « Storage & databases », puis « R2 Object Storage », puis « Add R2 subscription to my account » ; sur la page « Activate R2 », cocher les deux cases et cliquer « Activate ». Cloudflare demande une carte au dossier (ou reprend celle qui y est déjà), même pour rester dans le forfait gratuit, et ne la charge que si les limites mensuelles sont dépassées (libellés relevés le 20 octobre 2026).
+4. Autoriser l'accès à son compte Cloudflare, dans la fenêtre que Cloudflare ouvre à l'étape 2, avec le compte du domaine.
+5. Coller les valeurs S3 dans Publii, lancer le premier rendu et la première synchro (étape 3).
 
 ## 1. Vérifier l'ordinateur et installer le toolkit
 
@@ -43,7 +44,21 @@ Ce qu'un Windows neuf réserve (constaté le 20 octobre 2026 dans une machine vi
 
 ## 2. Préparer Cloudflare
 
-Vous avez besoin du serveur MCP de Cloudflare, `https://mcp.cloudflare.com/mcp` (developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/). S'il n'est pas branché, expliquez à la personne comment l'ajouter comme connecteur, puis attendez qu'elle ait autorisé l'accès dans la fenêtre de Cloudflare. Repli : Wrangler (`npx wrangler login`), avec sa permission.
+Vous avez besoin du serveur MCP de Cloudflare, `https://mcp.cloudflare.com/mcp` (developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/). C'est lui qui sait brancher un domaine sur un bucket et poser une règle de réécriture. L'ancien connecteur « Cloudflare Developer Platform » de claude.ai ne suffit pas : il crée des buckets, mais il n'a aucun outil pour les domaines ni pour les règles, et Cloudflare l'a déprécié au profit du serveur ci-dessus.
+
+Regardez d'abord si le serveur est là, et dans quel état :
+
+- **Branché et autorisé** : vérifiez avec la personne qu'il voit le bon compte, celui du domaine, puis passez à la suite.
+- **Configuré, mais il demande une authentification** : demandez à la personne de taper `/mcp` dans cette session (ou d'ouvrir le menu Connecteurs de la session), de choisir `cloudflare` et de s'authentifier. La fenêtre de Cloudflare s'ouvre dans son navigateur : elle choisit le compte du domaine et autorise.
+- **Absent** : ajoutez-le au niveau de l'utilisateur, avec sa permission :
+  ```bash
+  claude mcp add --transport http --scope user cloudflare https://mcp.cloudflare.com/mcp
+  ```
+  Dans l'application de bureau, `claude` n'est pas dans le PATH : le programme est sous `%APPDATA%\Claude\claude-code\<version>\<dossier>\claude.exe` (prenez la version la plus récente). Un serveur ajouté ainsi n'apparaît que dans une nouvelle session. Avant de le demander, donnez à la personne une courte instruction de reprise à coller (le dossier du site, ce qui est déjà fait). Demandez-lui ensuite de quitter complètement l'application (icône près de l'horloge, Quitter), de la relancer, d'ouvrir une nouvelle session dans le même dossier, d'y coller l'instruction et de s'authentifier par `/mcp` comme ci-dessus.
+
+Ne comptez pas sur un connecteur ajouté dans les paramètres de claude.ai. Le 21 octobre 2026 (application de bureau 3.1623.1, Claude Code 2.1.304), un connecteur personnalisé `mcp.cloudflare.com` ajouté et autorisé dans claude.ai n'est apparu dans aucune session de l'onglet Code, même ouverte après coup. `claude mcp add` l'a rendu visible.
+
+Repli, si le serveur ne peut pas être branché : Wrangler (`npx wrangler login`, avec sa permission) crée le bucket et branche le domaine, mais il ne pose pas la règle de réécriture ; celle-ci se fait alors avec la personne, dans le tableau de bord. Ne pilotez pas le tableau de bord de Cloudflare dans le navigateur à la place du serveur sans l'avoir d'abord proposé à la personne.
 
 Dans l'ordre, en montrant chaque opération avant de la lancer :
 
@@ -54,14 +69,17 @@ Dans l'ordre, en montrant chaque opération avant de la lancer :
    - expression : `ends_with(http.request.uri.path, "/")`
    - réécriture dynamique du chemin : `concat(http.request.uri.path, "index.html")`
    Si la zone a déjà un jeu de règles pour cette phase, ajoutez la règle sans effacer les autres.
-5. **Obtenir les clés S3 du bucket.** Deux voies :
+5. **Préremplir les réglages du serveur dans Publii** (toolkit 1.3.4 ou plus récent), Publii fermé. Une commande `set_s3_deployment` avec `website_url` (le domaine), `endpoint` (`https://<ID DU COMPTE>.r2.cloudflarestorage.com`, sans le nom du bucket) et `bucket` ; `region` vaut `auto` par défaut. `plan`, résumé à la personne, `apply` sur son accord. La commande écrit les valeurs que Publii écrit lui-même pour R2 et refuse les deux clés : c'est la personne qui les colle.
+6. **Obtenir les clés S3 du bucket.** Deux voies :
    - **Tableau de bord (recommandée)** : la personne ouvre R2, « Manage API Tokens », crée un jeton de compte avec la permission « Object Read & Write » limitée à ce bucket, et garde la page ouverte : le secret ne s'affiche qu'une fois (developers.cloudflare.com/r2/api/tokens/).
    - **API**, si votre accès le permet : la clé d'accès est l'`id` du jeton créé, le secret est l'empreinte SHA-256 de sa `value` (même page). Affichez-les une seule fois, à l'étape 3, et ne les écrivez dans aucun fichier.
    Le point de terminaison est `https://<ID DU COMPTE>.r2.cloudflarestorage.com`, sans le nom du bucket.
 
 ## 3. Ce que la personne colle dans Publii
 
-Donnez-lui cette liste, puis attendez qu'elle vous dise que c'est fait. Les libellés sont ceux de Publii 0.48.1 (relevés le 20 octobre 2026) ; une autre version peut les formuler autrement.
+Si `set_s3_deployment` a rempli les réglages (étape 2.5), la personne n'a que les deux clés à coller. Dites-lui d'ouvrir Publii et le site, de cliquer « Server » dans la barre latérale, de coller « Access ID » et « Secret key » (étape 2.6), puis de cliquer « Save settings ». Le reste est déjà rempli : elle peut le relire avant d'enregistrer.
+
+Sinon (toolkit antérieur à la 1.3.4, ou commande refusée), donnez-lui toute la liste, puis attendez qu'elle vous dise que c'est fait. Les libellés sont ceux de Publii 0.48.1 (relevés le 20 octobre 2026) ; une autre version peut les formuler autrement.
 
 | Dans Publii, Server | Valeur |
 |---|---|
@@ -69,12 +87,12 @@ Donnez-lui cette liste, puis attendez qu'elle vous dise que c'est fait. Les libe
 | Website URL | `https://` puis le domaine |
 | Use a custom S3 provider | activé (l'interrupteur à gauche du libellé) |
 | S3 Provider endpoint | `https://<ID DU COMPTE>.r2.cloudflarestorage.com` |
-| Access ID et Secret key | ceux de l'étape 2.5 |
+| Access ID et Secret key | ceux de l'étape 2.6 |
 | Bucket | le nom créé à l'étape 2.2 |
 | Region | `auto` |
 | Prefix, Cache-Control, ACL | laisser les valeurs proposées (ACL : Public read) |
 
-Publii masque les deux clés par des points une fois tapées. Ensuite, dans Publii : Save settings, aperçu du site (premier rendu), puis « Sync your website » et le bouton du même nom dans la fenêtre qui s'ouvre. Quand la synchro est finie, la personne **ferme Publii** et vous le dit.
+Publii masque les deux clés par des points une fois tapées. Ensuite, dans Publii : Save settings, aperçu du site (premier rendu), puis « Sync your website » et le bouton du même nom dans la fenêtre qui s'ouvre. Quand la synchro est finie, la personne **ferme Publii** et vous le dit. `get_site_settings` montre alors `deployment.keys_set` à `true` : vous savez que les clés sont enregistrées, sans les avoir lues.
 
 ## 4. Vérifier la mise en ligne
 

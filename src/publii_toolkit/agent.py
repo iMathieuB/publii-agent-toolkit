@@ -50,6 +50,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from .models import CoreMeta, Menu, MenuItem, Post, PostAdditionalData
 from .repository import (
@@ -181,8 +182,22 @@ def _op_list_menus(repo: PubliiRepository, args: dict) -> Any:
     ]
 
 
+def _deployment_summary(site: dict) -> dict:
+    """Where the server settings point. Never a credential: for S3, keys_set only."""
+    deployment = site.get("deployment") or {}
+    out: dict[str, Any] = {"protocol": deployment.get("protocol") or "",
+                           "website_url": site.get("domain") or ""}
+    if out["protocol"] == "s3":
+        s3 = deployment.get("s3") or {}
+        out["endpoint"] = s3.get("endpoint") or ""
+        out["bucket"] = s3.get("bucket") or ""
+        out["region"] = (s3.get("customRegion") if s3.get("customProvider") else s3.get("region")) or ""
+        out["keys_set"] = bool(s3.get("id")) and bool(s3.get("key"))
+    return out
+
+
 def _op_get_site_settings(repo: PubliiRepository, args: dict) -> Any:
-    """The settings update_site_settings can change, the theme's menu positions, and the editors in use. Never returns credentials."""
+    """The settings update_site_settings can change, where the server settings point (set_s3_deployment), the theme's menu positions, and the editors in use. Never returns credentials: deployment.keys_set only says whether both S3 keys are filled."""
     view = _PlanView(repo)
     site = repo.read_site_config()
     theme = repo.read_theme_config()
@@ -199,6 +214,7 @@ def _op_get_site_settings(repo: PubliiRepository, args: dict) -> Any:
         "privacy_policy_page": gdpr.get("privacyPolicyPostId") or None,
         "front_page": advanced.get("pageAsFrontpage") if advanced.get("usePageAsFrontpage") else None,
         "theme": site.get("theme", ""),
+        "deployment": _deployment_summary(site),
         "theme_menu_positions": {
             position: {"name": spec.get("name", position), "in_use": position in view.menu_positions()}
             for position, spec in _theme_menus(view).items()
@@ -743,6 +759,115 @@ def _op_update_site_settings(repo: PubliiRepository, tx, args: dict) -> Any:
     return {"updated": spec["shown"]}
 
 
+# -- set_s3_deployment -------------------------------------------------------- #
+# Fills Publii's "S3 compatible storage" server settings, all but the two keys.
+# The site owner pastes the Access ID and the Secret key in Publii, where they
+# belong: this command refuses them, and nothing here reads them back (the
+# summary in get_site_settings only says whether both are filled).
+#
+# Paths and values are the ones Publii writes itself for Cloudflare R2, read on
+# 2026-10-21 from a site saved in Publii 0.48.1 and one saved in 0.47.6:
+#   domain                        "https://<host>"   (Server, Website URL)
+#   deployment.protocol           "s3"
+#   deployment.s3.customProvider  true               ("Use a custom S3 provider")
+#   deployment.s3.provider        "custom"
+#   deployment.s3.endpoint        "https://<account id>.r2.cloudflarestorage.com"
+#   deployment.s3.bucket          the bucket name
+#   deployment.s3.region          ""                 (the AWS list, unused)
+#   deployment.s3.customRegion    "auto"             (R2's region)
+# Prefix, ACL and the two Cache-Control headers are left alone: Publii merges
+# its defaults over a partial object when it reads the file.
+
+S3_DEPLOYMENT_ARGS = ("website_url", "endpoint", "bucket", "region")
+S3_KEY_ARGS = {"id", "key", "access_id", "access_key", "access_key_id", "secret",
+               "secret_key", "secret_access_key"}
+HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+REGION_RE = re.compile(r"^[a-z0-9-]{1,32}$")
+
+
+def _https_host(value: Any, name: str, bare_host_ok: bool) -> str:
+    """'https://<host>' from a URL with no path, query or credentials."""
+    if not isinstance(value, str) or not value.strip():
+        raise CommandError(f"{name} must be a non-empty string.")
+    text = value.strip()
+    if bare_host_ok and "://" not in text:
+        text = "https://" + text
+    parts = urlsplit(text)
+    host = (parts.hostname or "").lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = -1
+    if (parts.scheme != "https" or not HOST_RE.match(host) or port is not None
+            or parts.username or parts.password or parts.path not in ("", "/")
+            or parts.query or parts.fragment):
+        hint = (" Give the address alone, e.g. 'example.com'." if bare_host_ok else
+                " Give https://<host> alone, without the bucket name or a path.")
+        raise CommandError(f"{name}: {value!r} is not an https address.{hint}")
+    return "https://" + host
+
+
+def _check_set_s3_deployment(view, args: dict) -> dict:
+    keys = sorted(set(args) & S3_KEY_ARGS)
+    if keys:
+        raise CommandError(
+            f"set_s3_deployment never takes the S3 keys ({keys}): the site owner pastes the "
+            f"Access ID and the Secret key in Publii, Server, then clicks Save settings."
+        )
+    extra = sorted(set(args) - set(S3_DEPLOYMENT_ARGS))
+    if extra:
+        raise CommandError(f"set_s3_deployment does not take {extra}. Allowed: {list(S3_DEPLOYMENT_ARGS)}.")
+    for required in ("website_url", "endpoint", "bucket"):
+        if required not in args:
+            raise CommandError(f"set_s3_deployment needs {required!r}.")
+
+    website = _https_host(args["website_url"], "website_url", bare_host_ok=True)
+    endpoint = _https_host(args["endpoint"], "endpoint", bare_host_ok=False)
+    bucket = args["bucket"]
+    if not isinstance(bucket, str) or not BUCKET_RE.match(bucket) or ".." in bucket:
+        raise CommandError(f"bucket: {bucket!r} is not a bucket name (lowercase letters, digits, "
+                           f"hyphens and dots, 3 to 63 characters).")
+    region = args.get("region", "auto")
+    if not isinstance(region, str) or not REGION_RE.match(region):
+        raise CommandError(f"region: {region!r} is not a region name, e.g. 'auto' for Cloudflare R2.")
+
+    deployment = view.site_config().get("deployment") or {}
+    current = deployment.get("protocol") or ""
+    if current not in ("", "s3"):
+        raise CommandError(
+            f"The site already publishes with {current!r}. Changing the server type is the "
+            f"site owner's decision, in Publii, Server."
+        )
+    s3 = deployment.get("s3") or {}
+    keys_set = bool(s3.get("id")) and bool(s3.get("key"))
+
+    site = {
+        ("domain",): website,
+        ("deployment", "protocol"): "s3",
+        ("deployment", "s3", "customProvider"): True,
+        ("deployment", "s3", "provider"): "custom",
+        ("deployment", "s3", "endpoint"): endpoint,
+        ("deployment", "s3", "bucket"): bucket,
+        ("deployment", "s3", "region"): "",
+        ("deployment", "s3", "customRegion"): region,
+    }
+    shown = {
+        "website_url": website, "endpoint": endpoint, "bucket": bucket, "region": region,
+        "keys": ("already filled in Publii, kept" if keys_set else
+                 "not set: the site owner pastes the Access ID and the Secret key in Publii, Server"),
+    }
+    return {"site": site, "shown": shown}
+
+
+def _op_set_s3_deployment(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Fill Publii's S3 server settings, all but the two keys. args: website_url (the site's address, e.g. 'example.com', written as https://), endpoint (the S3 endpoint without the bucket, e.g. 'https://<account id>.r2.cloudflarestorage.com' for Cloudflare R2), bucket, region? (default 'auto', R2's region). The Access ID and the Secret key are refused: the site owner pastes them in Publii, Server, and clicks Save settings. Keys already filled are kept. A site set to another server type is refused."""
+    view = _ApplyView(repo, tx)
+    spec = _check_set_s3_deployment(view, args)
+    tx.set_config_values(SITE_CONFIG, spec["site"])
+    return {"updated": spec["shown"]}
+
+
 # -- add_media ---------------------------------------------------------------- #
 
 ADD_MEDIA_ARGS = {"file", "target", "slug", "id", "name", "featured", "alt"}
@@ -889,6 +1014,7 @@ WRITE_OPS: dict[str, Callable] = {
     "remove_menu_item": _op_remove_menu_item,
     "update_menu_item": _op_update_menu_item,
     "update_site_settings": _op_update_site_settings,
+    "set_s3_deployment": _op_set_s3_deployment,
     "add_media": _op_add_media,
 }
 
@@ -1101,6 +1227,11 @@ def _describe_or_raise(repo: PubliiRepository, cmd: Command, view: _PlanView) ->
     if cmd.op == "update_site_settings":
         spec = _check_update_site_settings(view, cmd.args)
         return "update site settings: " + ", ".join(
+            f"{k} -> {v!r}" for k, v in spec["shown"].items())
+
+    if cmd.op == "set_s3_deployment":
+        spec = _check_set_s3_deployment(view, cmd.args)
+        return "set the S3 server settings: " + ", ".join(
             f"{k} -> {v!r}" for k, v in spec["shown"].items())
 
     if cmd.op == "add_media":

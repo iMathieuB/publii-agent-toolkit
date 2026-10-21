@@ -57,7 +57,7 @@ publii-agent ops
 
 Reads, available immediately: `list_posts`, `get_post`, `list_tags`, `list_menus`, `get_site_settings`, `check`.
 
-Writes, through plan and apply: `create_page`, `update_post`, `update_meta`, `set_tags`, `create_menu`, `add_menu_item`, `remove_menu_item`, `update_menu_item`, `update_site_settings`, `add_media`.
+Writes, through plan and apply: `create_page`, `update_post`, `update_meta`, `set_tags`, `create_menu`, `add_menu_item`, `remove_menu_item`, `update_menu_item`, `update_site_settings`, `set_s3_deployment`, `add_media`.
 
 To rename a menu entry, use `update_menu_item`, not a remove and an add: the add puts the entry at the end of its level and reorders the menu.
 
@@ -72,6 +72,8 @@ To rename a menu entry, use `update_menu_item`, not a remove and an add: the add
 **`add_media`.** Copies a local image (JPEG, PNG, WebP, GIF or SVG) into the site. With `"target": "logo"` it returns `media/website/<file>`, the value `update_site_settings` takes as `logo`. With `"target": "post"` and a page's `slug` it returns `#DOMAIN_NAME#<file>`, which you put in that page's text, for example `<img src="#DOMAIN_NAME#atelier.jpg" alt="L'atelier">`; add `"featured": true` and `"alt"` to make it the page's featured image. It never overwrites a different file of the same name: pass another `name`. Publii makes its smaller responsive copies of an image when someone uploads it in the app; images added here have none until the user regenerates thumbnails in Publii.
 
 **`update_site_settings`.** Only these keys exist, everything else is refused: `site_name`, `site_description` (the default meta description), `logo`, `cookie_banner` (true or false: Publii's built-in GDPR cookie banner), `privacy_policy_page` (the slug of the page the banner links to), `front_page` (the slug of the page shown at the site root; without it the theme shows a list of blog posts there). The banner's own wording stays in Publii's settings.
+
+**`set_s3_deployment`.** Fills Publii's "S3 compatible storage" server settings, all but the two keys: `website_url` (the site's address, e.g. `example.com`, written as `https://`), `endpoint` (the S3 endpoint without the bucket; for Cloudflare R2, `https://<account id>.r2.cloudflarestorage.com`), `bucket`, and `region` (default `auto`, R2's region). It writes the same values Publii writes when someone fills the form for R2 (read from sites saved in Publii 0.47.6 and 0.48.1), and leaves Prefix, ACL and the Cache-Control headers alone. The Access ID and the Secret key are refused: the user pastes them in Publii, Server, and clicks Save settings. Keys already filled are kept, and a site set to another server type (FTP, SFTP, GitHub Pages...) is refused. Afterwards, `get_site_settings` shows under `deployment` where the settings point and `keys_set`, which only says whether both keys are filled, so you can tell the user saved them without ever reading them.
 
 ## A worked example: a five-page site from a fresh Publii site
 

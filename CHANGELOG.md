@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] — 2026-10-21
+
+### Added
+
+- **`set_s3_deployment`**: fills Publii's "S3 compatible storage" server settings, all but the two keys, so the site owner only pastes the Access ID and the Secret key. It takes `website_url`, `endpoint` (without the bucket), `bucket` and `region` (default `auto`), and writes the values Publii itself writes for Cloudflare R2: `domain`, `deployment.protocol` `s3`, and under `deployment.s3` `customProvider` true, `provider` `custom`, `endpoint`, `bucket`, an empty `region` and `customRegion`. These were read from a site saved in Publii 0.48.1 and one saved in 0.47.6 on 2026-10-21, with the same result in both. Prefix, ACL and the Cache-Control headers are left to Publii's defaults. The keys are refused under any of their usual names, keys already filled are kept, and a site set to another server type is refused. Asked for while preparing a video demonstration: the agent had created the bucket and knew every value but the keys, and the owner was retyping them by hand.
+- The `site-publii-cloudflare` skill uses it: once the bucket, its domain and the rewrite rule are in place, the agent fills the server settings (step 2.5), and the person creates the R2 token in the dashboard and pastes the two keys (step 2.6). The full table stays as the way to do it with an older toolkit.
+- `get_site_settings` now has a `deployment` summary: protocol, website address and, for S3, endpoint, bucket, region and `keys_set`, a yes or no that never carries a key.
+
+### Fixed
+
+- **`site-publii-cloudflare` skill: connecting Cloudflare from the Code tab of the Claude desktop app.** The skill told the agent to have the person add Cloudflare's MCP server as a connector. On 2026-10-21 (desktop app 3.1623.1, Claude Code 2.1.304), a custom `mcp.cloudflare.com` connector added and authorized in claude.ai never reached a Code tab session, even a new one. The skill now checks the server's state and, when it is missing, adds it at user scope with `claude mcp add --transport http --scope user cloudflare https://mcp.cloudflare.com/mcp` (the bundled `claude.exe` lives under `%APPDATA%\Claude\claude-code\`, outside the PATH). The person then signs in with `/mcp`. It also warns that the older "Cloudflare Developer Platform" connector, which Cloudflare has deprecated, has no tools for bucket domains or rules, says that Wrangler cannot set the rewrite rule, and asks the agent to offer before driving the Cloudflare dashboard in the browser instead of the server.
+- The R2 activation step now gives the dashboard labels read on 2026-10-20, in place of a placeholder.
+
 ## [1.3.3] — 2026-10-20
 
 Found by running the five-page example end to end on a fresh Windows 11 virtual machine, with Publii 0.48.1, the version getpublii.com now offers: install without Git, build with one plan and one apply, then `desktop-sync --apply` to an S3 endpoint (a local S3 emulator standing in for Cloudflare R2, so nothing went online).
