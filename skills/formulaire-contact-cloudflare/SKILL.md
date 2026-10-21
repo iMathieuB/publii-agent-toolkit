@@ -87,6 +87,8 @@ Si le site est un site Publii, avec le toolkit, dans un seul lot, après `plan` 
 
 Puis publier (`publii-agent desktop-sync`, à blanc puis réel, avec permission).
 
+Gardez la case de consentement telle que dans le fragment : la case d'abord, puis son `<label for="consentement">` juste après, pas autour. Des thèmes cachent la case native et en dessinent une dans l'étiquette qui la suit : c'est le cas du thème par défaut de Publii (« Simple » : `input[type=checkbox]{opacity:0;position:absolute}`, puis `input[type=checkbox]+label:before`). Une case placée dans son étiquette y reste invisible, et le Worker refuse alors chaque envoi faute de consentement (constaté le 21 octobre 2026). **Vérifiez sur la page en ligne que la case se voit et se coche.**
+
 Le formulaire fonctionne sans JavaScript, sauf Turnstile : le script de Turnstile est chargé à la fin du fragment. **Vérifiez sur la page en ligne que le script est bien là** (code source de `/contact/`). Si l'éditeur l'a retiré, dites-le à la personne : le Worker refusera chaque envoi tant que la vérification Turnstile est exigée. Deux voies : ajouter le script dans le code personnalisé du thème (dans Publii, geste de la personne, la skill ne touche pas à ce réglage), ou retirer temporairement le secret Turnstile (le Worker se rabat alors sur le champ piège seul, moins efficace contre les robots).
 
 ## 5. L'essai

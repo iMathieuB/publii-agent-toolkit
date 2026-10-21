@@ -3,7 +3,7 @@
 <p><label for="courriel">Courriel</label><br><input id="courriel" name="courriel" type="email" required maxlength="254" autocomplete="email"></p>
 <p><label for="message">Message (facultatif)</label><br><textarea id="message" name="message" rows="5" maxlength="2000"></textarea></p>
 <p style="position:absolute;left:-10000px" aria-hidden="true"><label for="site_web">Ne pas remplir</label><input id="site_web" name="site_web" type="text" tabindex="-1" autocomplete="off"></p>
-<p><label><input name="consentement" type="checkbox" value="oui" required> J'accepte que &lt;NOM DE L'ENTREPRISE&gt; m'écrive au sujet de &lt;OBJET DE LA LISTE&gt;.</label></p>
+<p><input id="consentement" name="consentement" type="checkbox" value="oui" required><label for="consentement">J'accepte que &lt;NOM DE L'ENTREPRISE&gt; m'écrive au sujet de &lt;OBJET DE LA LISTE&gt;.</label></p>
 <div class="cf-turnstile" data-sitekey="&lt;CLÉ PUBLIQUE TURNSTILE&gt;" data-language="fr"></div>
 <p><button type="submit">Envoyer</button></p>
 <p><small>Vos renseignements servent seulement à &lt;OBJET DE LA LISTE&gt;. Ils sont transmis par courriel à &lt;NOM DE L'ENTREPRISE&gt; et ne sont pas conservés sur ce site. Voir la <a href="/politique-de-confidentialite/">politique de confidentialité</a>.</small></p>
