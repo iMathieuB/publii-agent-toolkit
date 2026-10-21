@@ -1,6 +1,6 @@
 ---
 name: site-publii-cloudflare
-description: Met en ligne un petit site Publii (accueil, services, à propos, contact, politique de confidentialité, menu, logo) sur Cloudflare R2 avec votre propre domaine, en faisant tout ce qu'un agent peut faire sur votre ordinateur et dans votre compte Cloudflare, et en vous laissant les trois gestes qui vous reviennent (les clés dans Publii, le premier rendu, la première synchro). Utilise publii-agent-toolkit pour écrire dans le site sans le briser. Demande votre permission avant chaque installation, chaque écriture et chaque publication. Déclenche pour « mets mon site Publii en ligne sur Cloudflare », « héberge mon site sur R2 », « crée les pages de mon site Publii », « monte mon site avec mon domaine ». Demande un agent qui travaille sur votre ordinateur (Claude Code, dans l'onglet Code de l'application Claude, ou un équivalent) ; dans claude.ai seul, la skill ne peut que rédiger.
+description: Met en ligne un petit site Publii (accueil, services, à propos, contact, politique de confidentialité, menu, logo, image d'accueil) sur Cloudflare R2 avec votre propre domaine, en faisant tout ce qu'un agent peut faire sur votre ordinateur et dans votre compte Cloudflare, et en vous laissant les trois gestes qui vous reviennent (les clés dans Publii, le premier rendu, la première synchro). Utilise publii-agent-toolkit pour écrire dans le site sans le briser. Demande votre permission avant chaque installation, chaque écriture et chaque publication. Déclenche pour « mets mon site Publii en ligne sur Cloudflare », « héberge mon site sur R2 », « crée les pages de mon site Publii », « monte mon site avec mon domaine ». Demande un agent qui travaille sur votre ordinateur (Claude Code, dans l'onglet Code de l'application Claude, ou un équivalent) ; dans claude.ai seul, la skill ne peut que rédiger.
 ---
 
 # Site Publii sur Cloudflare R2
@@ -108,7 +108,13 @@ Faites lire chaque texte à la personne et attendez son accord. Ensuite, avec le
 
 **Bandeau de témoins.** Publii en a un intégré. Activez-le seulement si le site pose des témoins ou charge un outil de mesure : un site sans traceur n'en a pas besoin. Posez la question à la personne et notez sa réponse.
 
+**Image hero de l'accueil.** Le thème par défaut de Publii affiche l'image à la une d'une page en grand, en haut de la page (le « hero »). Proposez-en une pour l'accueil, et attendez l'accord de la personne : ce que l'image montre et pourquoi elle convient à ce que fait l'entreprise, son format (paysage, assez grande pour un écran large, par exemple 1920 pixels de large), le texte alternatif, et une invite prête à coller dans le générateur d'images de la personne, ou des mots-clés pour une banque de photos libres de droits. Évitez le texte dans l'image, les faux logos et les visages qui pourraient passer pour de vraies personnes de l'entreprise.
+
+Vous ne produisez pas l'image vous-même, et vous ne pilotez pas un générateur d'images dans le navigateur à la place de la personne : les conditions d'utilisation de ces services l'interdisent souvent (celles d'OpenAI excluent d'« automatically or programmatically extract data or Output »). La personne crée ou choisit l'image, la garde sur son ordinateur et vous en donne le chemin. Ouvrez-la, dites-lui si elle correspond à la proposition, et attendez son accord. Placez-la ensuite avec `add_media` (`"target":"post"`, le `slug` de l'accueil, `"featured":true`, `alt`), dans le même lot que les pages ou dans un lot à part. Si la personne ne veut pas d'image pour l'instant, passez : le thème affiche alors l'accueil sans hero.
+
 ## 6. Publier
+
+Si le toolkit a ajouté une image à une page (l'image hero, par exemple), demandez d'abord à la personne d'ouvrir le site dans Publii, d'aller dans Tools, de lancer la régénération des miniatures (« Regenerate thumbnails » [libellé à vérifier dans Publii 0.48.1]), puis de fermer Publii. Publii ne fabrique les copies réduites d'une image que lorsqu'on l'ajoute dans l'application ; sans elles, le thème pointe vers des fichiers absents et l'image risque de s'afficher brisée.
 
 ```bash
 publii-agent desktop-sync --name <site>            # aperçu : dit ce qui serait publié
