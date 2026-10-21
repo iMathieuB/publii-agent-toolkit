@@ -8,7 +8,7 @@ Ask the user before each install. Then:
 
 ```bash
 python --version        # needs 3.10 or newer
-pip install "publii-agent-toolkit[desktop] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
+pip install "publii-agent-toolkit[desktop,images] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
 publii-agent ops        # proves the install; lists every command
 ```
 
@@ -69,7 +69,7 @@ To rename a menu entry, use `update_menu_item`, not a remove and an add: the add
 
 **`add_menu_item` with `page`.** Pass the page's slug as `page` instead of an id as `link`, and the entry points at that page even if it is created earlier in the same batch.
 
-**`add_media`.** Copies a local image (JPEG, PNG, WebP, GIF or SVG) into the site. With `"target": "logo"` it returns `media/website/<file>`, the value `update_site_settings` takes as `logo`. With `"target": "post"` and a page's `slug` it returns `#DOMAIN_NAME#<file>`, which you put in that page's text, for example `<img src="#DOMAIN_NAME#atelier.jpg" alt="L'atelier">`; add `"featured": true` and `"alt"` to make it the page's featured image. It never overwrites a different file of the same name: pass another `name`. Publii makes its smaller responsive copies of an image when someone uploads it in the app; images added here have none until the user regenerates thumbnails in Publii.
+**`add_media`.** Copies a local image (JPEG, PNG, WebP, GIF or SVG) into the site. With `"target": "logo"` it returns `media/website/<file>`, the value `update_site_settings` takes as `logo`. With `"target": "post"` and a page's `slug` it returns `#DOMAIN_NAME#<file>`, which you put in that page's text, for example `<img src="#DOMAIN_NAME#atelier.jpg" alt="L'atelier">`; add `"featured": true` and `"alt"` to make it the page's featured image. It never overwrites a different file of the same name: pass another `name`. For a page or post, it also makes the smaller copies the theme's srcset expects (`responsive/<name>-<size>`, at the widths in the theme's `config.json` and the quality in the site settings), as Publii does when someone adds an image in the app: install the `images` extra (Pillow) for that. Compared on 2026-10-21 with the copies Publii 0.48.1 made of the same photo: same names, same dimensions, sizes within 3 %. `responsive` in the result lists what was made; when it carries a `note` (no Pillow, GIF or SVG, WebP conversion turned on), ask the user to regenerate thumbnails in Publii (Tools) before publishing.
 
 **`update_site_settings`.** Only these keys exist, everything else is refused: `site_name`, `site_description` (the default meta description), `logo`, `cookie_banner` (true or false: Publii's built-in GDPR cookie banner), `privacy_policy_page` (the slug of the page the banner links to), `front_page` (the slug of the page shown at the site root; without it the theme shows a list of blog posts there). The banner's own wording stays in Publii's settings.
 

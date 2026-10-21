@@ -27,7 +27,7 @@ Suivez la section « Installing » d'`AGENTS.md` du toolkit, à chaque étape av
 
 ```bash
 python --version        # 3.10 ou plus récent ; sinon, sous Windows : winget install Python.Python.3.12
-pip install "publii-agent-toolkit[desktop] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
+pip install "publii-agent-toolkit[desktop,images] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
 python -c "import pywinauto"    # Windows : si « DLL load failed », winget install Microsoft.VCRedist.2015+.x64
 publii-agent ops
 publii-agent desktop-status
@@ -110,11 +110,11 @@ Faites lire chaque texte à la personne et attendez son accord. Ensuite, avec le
 
 **Image hero de l'accueil.** Le thème par défaut de Publii affiche l'image à la une d'une page en grand, en haut de la page (le « hero »). Proposez-en une pour l'accueil, et attendez l'accord de la personne : ce que l'image montre et pourquoi elle convient à ce que fait l'entreprise, son format (paysage, assez grande pour un écran large, par exemple 1920 pixels de large), le texte alternatif, et une invite prête à coller dans le générateur d'images de la personne, ou des mots-clés pour une banque de photos libres de droits. Évitez le texte dans l'image, les faux logos et les visages qui pourraient passer pour de vraies personnes de l'entreprise.
 
-Vous ne produisez pas l'image vous-même, et vous ne pilotez pas un générateur d'images dans le navigateur à la place de la personne : les conditions d'utilisation de ces services l'interdisent souvent (celles d'OpenAI excluent d'« automatically or programmatically extract data or Output »). La personne crée ou choisit l'image, la garde sur son ordinateur et vous en donne le chemin. Ouvrez-la, dites-lui si elle correspond à la proposition, et attendez son accord. Placez-la ensuite avec `add_media` (`"target":"post"`, le `slug` de l'accueil, `"featured":true`, `alt`), dans le même lot que les pages ou dans un lot à part. Si la personne ne veut pas d'image pour l'instant, passez : le thème affiche alors l'accueil sans hero.
+Vous ne produisez pas l'image vous-même, et vous ne pilotez pas un générateur d'images dans le navigateur à la place de la personne : les conditions d'utilisation de ces services l'interdisent souvent (celles d'OpenAI excluent d'« automatically or programmatically extract data or Output »). La personne crée ou choisit l'image, la garde sur son ordinateur et vous en donne le chemin. Ouvrez-la, dites-lui si elle correspond à la proposition, et attendez son accord. Placez-la ensuite avec `add_media` (`"target":"post"`, le `slug` de l'accueil, `"featured":true`, `alt`), dans le même lot que les pages ou dans un lot à part. Le toolkit fabrique en même temps les copies réduites que le thème attend, comme Publii le fait quand on ajoute une image dans l'application : la personne n'a rien à régénérer. Si la personne ne veut pas d'image pour l'instant, passez : le thème affiche alors l'accueil sans hero.
 
 ## 6. Publier
 
-Si le toolkit a ajouté une image à une page (l'image hero, par exemple), demandez d'abord à la personne d'ouvrir le site dans Publii, d'aller dans Tools, de lancer la régénération des miniatures (« Regenerate thumbnails » [libellé à vérifier dans Publii 0.48.1]), puis de fermer Publii. Publii ne fabrique les copies réduites d'une image que lorsqu'on l'ajoute dans l'application ; sans elles, le thème pointe vers des fichiers absents et l'image risque de s'afficher brisée.
+Si une image a été ajoutée à une page, regardez `responsive` dans le résultat d'`add_media`. Une liste `made` remplie veut dire que les copies réduites sont prêtes. Une `note` veut dire qu'elles ne l'ont pas été (Pillow absent, image GIF ou SVG, conversion WebP activée dans le site) : demandez alors à la personne d'ouvrir le site dans Publii, de lancer la régénération des miniatures dans Tools, puis de fermer Publii. Sans ces copies, le thème pointe vers des fichiers absents et l'image risque de s'afficher brisée.
 
 ```bash
 publii-agent desktop-sync --name <site>            # aperçu : dit ce qui serait publié
@@ -131,6 +131,6 @@ Dites à la personne : les adresses en ligne, ce qui a été créé, le chemin d
 
 - `publii_running` ou `site_locked` : Publii est ouvert. Demandez de le fermer ; ne réessayez pas en boucle.
 - `desktop-sync` refuse un site parce que Publii ouvrirait sa fenêtre « We've made significant changes to the Privacy Settings » : c'est qu'un toolkit antérieur à la 1.3.3 a activé le bandeau de témoins. Demandez à la personne d'ouvrir le site dans Publii, d'aller dans Site settings, de cliquer Save settings une fois, puis de fermer Publii.
-- Images ajoutées par le toolkit : Publii n'en fabrique pas les copies réduites ; la personne régénère les miniatures dans Publii si une image s'affiche mal.
+- Images ajoutées par le toolkit : il en fabrique les copies réduites quand Pillow est installé (option `images`). Sans Pillow, ou pour une image GIF ou SVG, la personne régénère les miniatures dans Publii (Tools).
 - Les textes du bandeau de témoins restent ceux de Publii ; la personne les traduit dans les réglages du site si le thème les affiche en anglais.
 - Une synchro publie pour vrai : la sauvegarde du toolkit protège le site sur l'ordinateur, elle n'annule pas une publication.

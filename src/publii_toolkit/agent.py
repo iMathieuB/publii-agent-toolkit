@@ -46,12 +46,14 @@ import logging
 import re
 import subprocess
 import sys
+import tempfile
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from . import images
 from .models import CoreMeta, Menu, MenuItem, Post, PostAdditionalData
 from .repository import (
     SITE_CONFIG,
@@ -524,8 +526,8 @@ def _op_create_page(repo: PubliiRepository, tx, args: dict) -> Any:
 # -- menus -------------------------------------------------------------------- #
 
 
-def _theme_menus(view) -> dict[str, dict]:
-    """Menu positions the active theme renders, from its own config.json."""
+def _theme_manifest(view) -> dict:
+    """The active theme's own config.json (menus, responsive image sizes), or {}."""
     theme = str(view.site_config().get("theme") or "")
     if not theme or not MEDIA_NAME_RE.match(theme):
         return {}
@@ -533,9 +535,15 @@ def _theme_menus(view) -> dict[str, dict]:
     if not path.is_file():
         return {}
     try:
-        menus = json.loads(path.read_text(encoding="utf-8")).get("menus") or {}
-    except (json.JSONDecodeError, OSError, AttributeError):
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _theme_menus(view) -> dict[str, dict]:
+    """Menu positions the active theme renders, from its own config.json."""
+    menus = _theme_manifest(view).get("menus") or {}
     return menus if isinstance(menus, dict) else {}
 
 
@@ -931,7 +939,7 @@ def _check_add_media(view, args: dict) -> dict:
 
 
 def _op_add_media(repo: PubliiRepository, tx, args: dict) -> Any:
-    """Copy a local image into the site's media folder and return the value to use. args: file (local path), target ('logo' -> value for update_site_settings.logo; 'post' -> '#DOMAIN_NAME#<file>' to put in the page text), slug|id (target 'post'), name? (file name on the site), featured? (true: make it the page's featured image), alt?. JPEG, PNG, WebP, GIF or SVG only; never overwrites a different file."""
+    """Copy a local image into the site's media folder and return the value to use. args: file (local path), target ('logo' -> value for update_site_settings.logo; 'post' -> '#DOMAIN_NAME#<file>' to put in the page text), slug|id (target 'post'), name? (file name on the site), featured? (true: make it the page's featured image), alt?. JPEG, PNG, WebP, GIF or SVG only; never overwrites a different file. For a page or post, also makes the smaller copies the theme's srcset expects (responsive/<name>-<size>), as Publii does when an image is added in the app, when Pillow is installed; 'responsive' in the result says what was made or why not."""
     spec = _check_add_media(_ApplyView(repo, tx), args)
     post: PostRef | None = spec["post"]
     if post is not None:
@@ -942,10 +950,58 @@ def _op_add_media(repo: PubliiRepository, tx, args: dict) -> Any:
     image_id = None
     if spec["featured"]:
         image_id = tx.add_post_image(post.id, url=spec["name"], alt=spec["alt"], set_as_featured=True)
+    responsive = (_stage_responsive(_ApplyView(repo, tx), tx, spec["source"], path, spec["featured"])
+                  if post is not None else None)
     return {"value": spec["value"], "file": spec["name"],
             "path": str(path.relative_to(repo.paths.input_dir.resolve()).as_posix()),
             "copied": copied, "featured_image_id": image_id,
-            "post_id": post.id if post is not None else None}
+            "post_id": post.id if post is not None else None,
+            "responsive": responsive}
+
+
+def _responsive_plan(view, name: str, featured: bool) -> tuple[dict[str, int], list[str], str]:
+    """Sizes to make for a post image, the sizes left to Publii, and why none, if none."""
+    advanced = view.site_config().get("advanced") or {}
+    if not advanced.get("responsiveImages", 1):
+        return {}, [], "responsive images are turned off in the site settings"
+    if advanced.get("forceWebp"):
+        return {}, [], ("the site converts images to WebP; regenerate thumbnails in Publii "
+                        "(Tools) before publishing")
+    if Path(name).suffix.lower() not in images.RESIZABLE:
+        return {}, [], f"Publii makes no smaller copies of {Path(name).suffix} images"
+    widths, skipped = images.variant_widths(_theme_manifest(view), featured)
+    if not widths:
+        return {}, skipped, "the theme declares no responsive sizes for this image"
+    if not images.pillow_available():
+        return {}, skipped, ("Pillow is not installed (pip install Pillow), so no smaller copies "
+                             "were made; regenerate thumbnails in Publii (Tools) before publishing")
+    return widths, skipped, ""
+
+
+def _stage_responsive(view, tx, source: Path, path: Path, featured: bool) -> dict:
+    """Make the theme's smaller copies of a post image and stage them with it.
+
+    A copy already on disk (made by Publii, or by an earlier run) is kept as is:
+    stage_media never overwrites a media file, and Publii's own copy is as good.
+    """
+    widths, left_to_publii, why = _responsive_plan(view, path.name, featured)
+    out: dict[str, Any] = {"made": [], "kept": [], "left_to_publii": left_to_publii}
+    if why:
+        out["note"] = why
+        return out
+    advanced = view.site_config().get("advanced") or {}
+    quality = advanced.get("imagesQuality") or 60
+    folder = path.parent / "responsive"
+    with tempfile.TemporaryDirectory(prefix="publii-responsive-") as tmp:
+        for size, made, (w, h) in images.make_variants(source, Path(tmp), path.stem, path.suffix,
+                                                        widths, quality):
+            target = folder / made.name
+            if target.exists():
+                out["kept"].append(size)
+                continue
+            tx.stage_media(made, target)
+            out["made"].append(f"{size} {w}x{h}")
+    return out
 
 
 def _ext_kind(suffix: str) -> str:
@@ -1241,6 +1297,10 @@ def _describe_or_raise(repo: PubliiRepository, cmd: Command, view: _PlanView) ->
         where = ("media/website" if spec["target"] == "logo" else
                  f"media/posts/{spec['post'].id if spec['post'].id is not None else '<new id>'}")
         extra = " and make it the featured image" if spec["featured"] else ""
+        if spec["target"] == "post":
+            widths, _, why = _responsive_plan(view, spec["name"], spec["featured"])
+            extra += (f", with {len(widths)} smaller copies for the theme ({', '.join(widths)})"
+                      if widths else f" ({why})")
         return f"copy {spec['source'].name} to {where}/{spec['name']}{extra}; use {spec['value']!r}"
 
     if cmd.op == "remove_menu_item":

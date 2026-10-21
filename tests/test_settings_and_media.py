@@ -407,3 +407,101 @@ def test_another_server_type_is_left_to_the_owner(fresh_site):
 
 def test_the_catalogue_lists_set_s3_deployment():
     assert "set_s3_deployment" in describe_operations()["write"]
+
+
+# ------------------------------------------------------------- responsive copies
+
+RESPONSIVE = {"featuredImages": {"sizes": {"hero": "88vw"}, "dimensions": {
+    "xs": {"width": 120, "height": "auto"}, "md": {"width": 200, "height": "auto"},
+    "2xl": {"width": 480, "height": "auto"}, "square": {"width": 100, "height": 100}}},
+    "contentImages": {"dimensions": {"sm": {"width": 150, "height": "auto"}}}}
+
+
+def with_responsive_theme(root: Path) -> None:
+    path = root / "input" / "themes" / "simple" / "config.json"
+    data = json.loads(path.read_text("utf-8"))
+    data["files"] = {"responsiveImages": RESPONSIVE}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def photo(folder: Path, name: str = "bureau.jpg", size=(300, 167)) -> Path:
+    Image = pytest.importorskip("PIL.Image")
+    path = folder / name
+    Image.new("RGB", size, (30, 90, 160)).save(path, "JPEG", quality=90)
+    return path
+
+
+def test_a_featured_image_gets_the_themes_smaller_copies(site_root, tmp_path):
+    with_responsive_theme(site_root)
+    out = AgentSession(str(site_root)).apply([{
+        "op": "add_media", "file": str(photo(tmp_path)), "target": "post", "slug": "home",
+        "featured": True, "alt": "Un bureau"}])
+    assert out["ok"], out
+    responsive = out["result"]["applied"][0]["result"]["responsive"]
+    # Width as declared, height rounded from the ratio (120 * 167 / 300 = 66.8),
+    # never enlarged (480 asked, 300 available), crops left to Publii.
+    assert responsive["made"] == ["xs 120x67", "md 200x111", "2xl 300x167"]
+    assert responsive["left_to_publii"] == ["square"]
+
+    from PIL import Image
+    folder = site_root / "input" / "media" / "posts" / "1" / "responsive"
+    sizes = {p.name: Image.open(p).size for p in folder.iterdir()}
+    assert sizes == {"bureau-xs.jpg": (120, 67), "bureau-md.jpg": (200, 111), "bureau-2xl.jpg": (300, 167)}
+
+
+def test_an_image_in_the_text_gets_the_content_sizes(site_root, tmp_path):
+    with_responsive_theme(site_root)
+    out = AgentSession(str(site_root)).apply([{
+        "op": "add_media", "file": str(photo(tmp_path)), "target": "post", "slug": "home"}])
+    assert out["result"]["applied"][0]["result"]["responsive"]["made"] == ["sm 150x84"]
+
+
+def test_the_plan_announces_the_copies(site_root, tmp_path):
+    with_responsive_theme(site_root)
+    out = AgentSession(str(site_root)).plan([{
+        "op": "add_media", "file": str(photo(tmp_path)), "target": "post", "slug": "home", "featured": True}])
+    assert "3 smaller copies" in out["result"]["steps"][0]["describes"], out
+
+
+def test_copies_publii_already_made_are_kept(site_root, tmp_path):
+    with_responsive_theme(site_root)
+    folder = site_root / "input" / "media" / "posts" / "1" / "responsive"
+    folder.mkdir(parents=True)
+    (folder / "bureau-md.jpg").write_bytes(b"made by Publii")
+    out = AgentSession(str(site_root)).apply([{
+        "op": "add_media", "file": str(photo(tmp_path)), "target": "post", "slug": "home", "featured": True}])
+    assert out["ok"], out
+    responsive = out["result"]["applied"][0]["result"]["responsive"]
+    assert responsive["kept"] == ["md"] and len(responsive["made"]) == 2
+    assert (folder / "bureau-md.jpg").read_bytes() == b"made by Publii"
+
+
+def test_without_pillow_the_image_still_goes_in_and_says_so(site_root, tmp_path, monkeypatch):
+    with_responsive_theme(site_root)
+    source = photo(tmp_path)
+    from publii_toolkit import images
+    monkeypatch.setattr(images, "pillow_available", lambda: False)
+    out = AgentSession(str(site_root)).apply([{
+        "op": "add_media", "file": str(source), "target": "post", "slug": "home", "featured": True}])
+    assert out["ok"], out
+    responsive = out["result"]["applied"][0]["result"]["responsive"]
+    assert responsive["made"] == [] and "Pillow" in responsive["note"]
+    assert not (site_root / "input" / "media" / "posts" / "1" / "responsive").exists()
+
+
+def test_the_copies_go_away_when_the_batch_fails(site_root, tmp_path):
+    with_responsive_theme(site_root)
+    out = AgentSession(str(site_root)).apply([
+        {"op": "add_media", "file": str(photo(tmp_path)), "target": "post", "slug": "home", "featured": True},
+        {"op": "update_post", "slug": "ghost", "title": "x"},
+    ])
+    assert not out["ok"]
+    assert not (site_root / "input" / "media" / "posts" / "1" / "responsive").exists()
+    assert not (site_root / "input" / "media" / "posts" / "1" / "bureau.jpg").exists()
+
+
+def test_the_logo_gets_no_copies(site_root, tmp_path, images):
+    with_responsive_theme(site_root)
+    out = AgentSession(str(site_root)).apply([
+        {"op": "add_media", "file": str(images["logo.png"]), "target": "logo"}])
+    assert out["result"]["applied"][0]["result"]["responsive"] is None

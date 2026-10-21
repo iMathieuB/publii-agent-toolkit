@@ -140,7 +140,7 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 | `update_menu_item` | write | `position`, `id`, and one or both of `label`, `title`; the entry keeps its place and its target |
 | `update_site_settings` | write | one or more of `site_name`, `site_description`, `logo`, `cookie_banner`, `privacy_policy_page`, `front_page`; any other key is refused |
 | `set_s3_deployment` | write | `website_url`, `endpoint` (without the bucket), `bucket`, and optionally `region` (default `auto`); the Access ID and the Secret key are refused |
-| `add_media` | write | `file` (local image), `target` (`logo` or `post`), `slug`\|`id` for a post, and optionally `name`, `featured`, `alt` |
+| `add_media` | write | `file` (local image), `target` (`logo` or `post`), `slug`\|`id` for a post, and optionally `name`, `featured`, `alt`; for a post, also makes the theme's smaller copies when Pillow is installed (`images` extra) |
 
 `publii-agent ops` returns this catalogue as JSON, which is the version to trust.
 
@@ -153,7 +153,7 @@ A later command in a batch can refer, by slug, to a page an earlier command crea
 Publii has no CLI. Rendering and syncing are interface actions, which leaves a human pressing a button in the middle of an otherwise scriptable pipeline. The `desktop` module drives the application itself, on Windows.
 
 ```bash
-pip install "publii-agent-toolkit[desktop] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
+pip install "publii-agent-toolkit[desktop,images] @ https://github.com/iMathieuB/publii-agent-toolkit/archive/refs/heads/main.zip"
 python -c "import pywinauto"   # "DLL load failed": install the Microsoft Visual C++ Redistributable
 
 publii-agent desktop-status
