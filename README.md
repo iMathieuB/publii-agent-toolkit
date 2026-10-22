@@ -140,7 +140,7 @@ Leaving the `with` block runs the integrity check and commits. Raising inside it
 | `update_menu_item` | write | `position`, `id`, and one or both of `label`, `title`; the entry keeps its place and its target |
 | `update_site_settings` | write | one or more of `site_name`, `site_description`, `logo`, `cookie_banner`, `privacy_policy_page`, `front_page`; any other key is refused |
 | `set_s3_deployment` | write | `website_url`, `endpoint` (without the bucket), `bucket`, and optionally `region` (default `auto`); the Access ID and the Secret key are refused |
-| `set_theme_style` | write | one or more of `primary_color`, `primary_dark_color`, `color_scheme`, `heading_font`, `body_font`, `menu_font` (checked against the theme), `footer_text`, `menu_style` (`pro` or `none`, default theme only) |
+| `set_theme_style` | write | one or more of `title_alignment`, `primary_color`, `primary_dark_color`, `color_scheme`, `heading_font`, `body_font`, `menu_font` (checked against the theme), `footer_text`, `menu_style` (`pro` or `none`, default theme only) |
 | `add_media` | write | `file` (local image), `target` (`logo` or `post`), `slug`\|`id` for a post, and optionally `name`, `featured`, `alt`; for a post, also makes the theme's smaller copies when Pillow is installed (`images` extra) |
 
 `publii-agent ops` returns this catalogue as JSON, which is the version to trust.

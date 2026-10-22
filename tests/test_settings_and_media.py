@@ -510,6 +510,7 @@ def test_the_logo_gets_no_copies(site_root, tmp_path, images):
 # ------------------------------------------------------------------ theme style
 
 THEME_OPTIONS = [
+    {"name": "alignHero", "type": "radio", "value": "left", "options": [{"value": "left"}, {"value": "center"}]},
     {"name": "colorScheme", "type": "radio", "value": "auto",
      "options": [{"value": "auto"}, {"value": "light"}, {"value": "dark"}]},
     {"name": "primaryColor", "type": "colorpicker", "value": "#D73A42"},
@@ -544,14 +545,14 @@ def test_the_look_is_written_to_the_theme_and_the_custom_css(site_root):
     (site_root / "input" / "config" / "theme.config.json").write_text(
         json.dumps({"config": {"logo": "media/website/logo.png"}}), encoding="utf-8")
     out = AgentSession(str(site_root)).apply([{
-        "op": "set_theme_style", "primary_color": "#1B5FA8", "color_scheme": "light",
+        "op": "set_theme_style", "title_alignment": "center", "primary_color": "#1B5FA8", "color_scheme": "light",
         "heading_font": "montserrat", "menu_font": "var(--heading-font)",
         "footer_text": "© Atelier <Dupont>", "menu_style": "pro"}])
     assert out["ok"], out
     theme = theme_config(site_root)
     assert theme["config"] == {"logo": "media/website/logo.png"}
     assert theme["customConfig"] == {
-        "primaryColor": "#1b5fa8", "colorScheme": "light", "fontHeadings": "montserrat",
+        "alignHero": "center", "primaryColor": "#1b5fa8", "colorScheme": "light", "fontHeadings": "montserrat",
         "fontMenu": "var(--heading-font)", "copyrightText": "<p>© Atelier &lt;Dupont&gt;</p>"}
     css = custom_css(site_root)
     assert css.startswith(".mine{color:red}\n\n/* publii-agent-toolkit: menu style, start.")
@@ -606,3 +607,49 @@ def test_the_plan_describes_the_look(site_root):
     out = AgentSession(str(site_root)).plan([{"op": "set_theme_style", "primary_color": "#1b5fa8", "menu_style": "pro"}])
     assert out["ok"] and "set the site's look" in out["result"]["steps"][0]["describes"]
     assert custom_css(site_root) == ""
+
+
+# ------------------------------------------------------------------ encoding
+
+def test_text_read_in_the_wrong_code_page_is_refused(site_root):
+    from publii_toolkit.agent import CommandError
+    garbled = "Claude et ChatGPT pour dÃ©butants"      # "débutants" read as cp1252
+    with pytest.raises(CommandError, match="Windows-1252"):
+        AgentSession(str(site_root)).plan([{"op": "update_post", "slug": "home", "title": garbled}])
+    with pytest.raises(CommandError, match="Windows-1252"):
+        AgentSession(str(site_root)).apply([{"op": "update_post", "slug": "home", "title": garbled}])
+
+
+def test_real_accents_and_symbols_pass(site_root):
+    title = "Débutants, São Paulo, Ça marche à 100 € → Œuvre « Noël »"
+    out = AgentSession(str(site_root)).plan([{"op": "update_post", "slug": "home", "title": title}])
+    assert out["ok"], out
+
+
+def test_the_cli_reads_utf8_on_stdin_whatever_the_code_page(site_root, tmp_path):
+    import os
+    import subprocess
+    import sys
+    batch = json.dumps([{"op": "update_post", "slug": "home", "title": "Formation pour débutants"}],
+                       ensure_ascii=False).encode("utf-8")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+    env["PYTHONUTF8"] = "0"   # Windows' default: stdin decoded with the ANSI code page
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+    run = subprocess.run([sys.executable, "-m", "publii_toolkit.cli", "--site", str(site_root), "apply"],
+                         input=batch, capture_output=True, env=env, timeout=60)
+    out = json.loads(run.stdout.decode("ascii"))     # the output is plain ASCII
+    assert out["ok"], out
+    db = sqlite3.connect(site_root / "input" / "db.sqlite")
+    try:
+        assert db.execute("SELECT title FROM posts WHERE slug = 'home'").fetchone()[0] == "Formation pour débutants"
+    finally:
+        db.close()
+
+
+def test_the_cli_reads_a_batch_file(site_root, tmp_path):
+    from publii_toolkit import cli
+    path = tmp_path / "lot.json"
+    path.write_text(json.dumps([{"op": "update_post", "slug": "home", "title": "Ça débute"}],
+                               ensure_ascii=False), encoding="utf-8-sig")
+    assert cli.main(["--site", str(site_root), "plan", f"@{path}"]) == 0

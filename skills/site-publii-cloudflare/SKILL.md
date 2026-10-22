@@ -42,6 +42,8 @@ Ce qu'un Windows neuf réserve (constaté le 20 octobre 2026 dans une machine vi
 - L'adresse en `.zip` installe le toolkit sans Git. Une adresse `git+https://` échoue quand Git n'est pas installé.
 - La publication (`desktop-sync`) passe par pywinauto, qui a besoin du Visual C++ Redistributable de Microsoft. Si `python -c "import pywinauto"` répond « DLL load failed », installez-le avec winget, avec la permission de la personne (Windows demande une confirmation).
 
+**Accents.** Passez les lots au toolkit en UTF-8 : en argument, dans un fichier (`publii-agent --site <dossier> plan @lot.json`), ou sur l'entrée standard avec le toolkit 1.3.5 ou plus récent. Avant la 1.3.5, l'entrée standard était lue dans la page de code de Windows, et « débutants » arrivait en « dÃ©butants ». Le toolkit refuse maintenant un texte lu de travers, avant toute écriture : si ce refus arrive, renvoyez le même lot par un fichier, et ne corrigez jamais les caractères à la main. Si la version installée est plus ancienne, mettez-la à jour avec la commande `pip install` ci-dessus, en ajoutant `--upgrade`.
+
 `desktop-status` liste les sites Publii trouvés. Demandez à la personne lequel est le bon et retenez son dossier, celui qui contient `input/` : c'est la valeur de `--site`. Lisez `AGENTS.md` en entier avant la première écriture.
 
 ## 2. Préparer Cloudflare
@@ -61,6 +63,8 @@ Regardez d'abord si le serveur est là, et dans quel état :
 Ne comptez pas sur un connecteur ajouté dans les paramètres de claude.ai. Le 21 octobre 2026 (application de bureau 3.1623.1, Claude Code 2.1.304), un connecteur personnalisé `mcp.cloudflare.com` ajouté et autorisé dans claude.ai n'est apparu dans aucune session de l'onglet Code, même ouverte après coup. `claude mcp add` l'a rendu visible.
 
 Le serveur MCP d'abord, pour tout ce qu'il sait faire. Le navigateur (Claude in Chrome, ou le navigateur intégré de l'application) sert seulement à ce que l'API ne fait pas, ou à ce qui revient à la personne. Dans ce cas, ouvrez vous-même la bonne page, au bon endroit, et préremplissez ce qui peut l'être : ne lui demandez ni de naviguer, ni d'afficher une fenêtre, ni de vous dire quand la page est prête.
+
+Quand la personne doit se connecter (à Cloudflare, à Google, à Bing), ne lui demandez pas de vous prévenir. Surveillez l'onglet : relisez son adresse et son titre toutes les cinq secondes environ, sans capture d'écran, et reprenez dès que la page connectée apparaît. Pour Cloudflare, c'est une adresse `https://dash.cloudflare.com/<identifiant du compte>/...`, ou un titre qui contient le nom du compte, au lieu de la page « Log in ». Annoncez-le en une phrase (« Vous êtes connecté, je continue ») et poursuivez. Si rien ne change au bout de trois minutes, demandez à la personne où elle en est. Faites de même après l'autorisation du serveur MCP : vérifiez vous-même qu'il répond, plutôt que d'attendre qu'elle vous le dise.
 
 Repli, si le serveur ne peut pas être branché : Wrangler (`npx wrangler login`, avec sa permission) crée le bucket et branche le domaine, mais il ne pose pas la règle de réécriture ; celle-ci se fait alors dans le tableau de bord, que vous ouvrez dans le navigateur à la bonne page.
 
@@ -120,6 +124,7 @@ Vous ne produisez pas l'image vous-même, et vous ne pilotez pas un générateur
 
 **Habillage du site.** Sans réglage, le thème par défaut garde sa couleur rouge, un menu en texte simple et « Powered by Publii » au pied de page. Proposez un habillage dans le même lot que les pages, et annoncez-le dans le plan, avec `set_theme_style` (toolkit 1.3.4 ou plus récent) :
 
+- `title_alignment` à `center` : le titre en haut de chaque page, centré ;
 - `primary_color` : une couleur tirée du logo (ouvrez-le), assez foncée pour du texte blanc ; le toolkit refuse une couleur sous un contraste de 3:1 ;
 - `color_scheme` à `light` si le logo est foncé sur un fond transparent, sinon le mode sombre du thème le rendrait illisible ;
 - une police de titres franche parmi celles que le thème propose (`heading_font`, par exemple `montserrat`), et `menu_font` à `var(--heading-font)` pour l'appliquer au menu ;

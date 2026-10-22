@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] — 2026-10-21
+
+### Fixed
+
+- **Accented text sent on stdin arrived garbled on Windows.** The CLI read stdin with `sys.stdin.read()`, which Python decodes with the Windows code page (cp1252) unless UTF-8 mode is on, so the "débutants" an agent sends as UTF-8 was stored as "dÃ©butants" and showed in the published page titles. Found in a rehearsal on 2026-10-21. Stdin is now read as bytes and decoded as UTF-8 (a UTF-8 or UTF-16 byte-order mark is honoured, and the code page is used only for bytes that are not valid UTF-8). A batch can also be passed as `@file.json`. The JSON the CLI prints is now plain ASCII with `\u` escapes, the same bytes in every console code page.
+- **Garbled text is refused before anything is written.** Every command's strings are checked for words that read as UTF-8 decoded as cp1252: such a word encodes back to cp1252 bytes forming valid UTF-8, which a genuine accented word never does, so real French, Portuguese and symbols such as € or → pass. The error says how to resend the batch.
+
+### Added
+
+- `set_theme_style` takes `title_alignment` (the theme's `alignHero`: `center` centres the header of every page).
+- The `site-publii-cloudflare` skill watches the browser tab while the person signs in (Cloudflare, Google, Bing) and carries on as soon as the signed-in page appears, instead of asking to be told; it centres page titles by default, and explains how to pass batches as UTF-8.
+
 ## [1.3.4] — 2026-10-21
 
 ### Added

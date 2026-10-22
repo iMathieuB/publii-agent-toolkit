@@ -31,7 +31,7 @@ from .repository import (
 
 from .desktop import DesktopError, PubliiDesktop, SiteState, SyncResult
 
-__version__ = "1.3.4"
+__version__ = "1.3.5"
 
 __all__ = [
     "AgentSession",

@@ -72,6 +72,36 @@ class CommandError(ValueError):
     """A command was malformed or referred to something that does not exist."""
 
 
+def _mojibake(value: Any) -> str | None:
+    """The first word that reads as UTF-8 text decoded as Windows-1252, if any.
+
+    "Débutants" sent as UTF-8 and read with Windows' default code page arrives
+    as "DÃ©butants". Such a word encodes back to cp1252 bytes that form valid
+    UTF-8; a genuine accented word does not ("é" is the lone byte 0xE9, never
+    valid UTF-8 on its own), so the test has no false alarm on real French,
+    Portuguese or symbols like € and →.
+    """
+    if isinstance(value, str):
+        for word in value.split():
+            if word.isascii():
+                continue
+            try:
+                fixed = word.encode("cp1252").decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+            if fixed != word:
+                return word
+        return None
+    if isinstance(value, dict):
+        value = list(value.values())
+    if isinstance(value, list):
+        for item in value:
+            found = _mojibake(item)
+            if found:
+                return found
+    return None
+
+
 @dataclass
 class Command:
     """One parsed, validated command."""
@@ -91,6 +121,13 @@ class Command:
                 f"Unknown op {op!r}. Known ops: {', '.join(sorted(OPERATIONS))}."
             )
         args = {k: v for k, v in payload.items() if k != "op"}
+        garbled = _mojibake(args)
+        if garbled:
+            raise CommandError(
+                f"{op}: {garbled!r} looks like UTF-8 text read as Windows-1252 (for example "
+                f"'Ã©' instead of 'é'). Nothing was written. Send the batch as UTF-8: as the "
+                f"argument, as @file.json, or on stdin with publii-agent 1.3.5 or later."
+            )
         return cls(op=op, args=args)
 
 
@@ -903,6 +940,7 @@ def _op_set_s3_deployment(repo: PubliiRepository, tx, args: dict) -> Any:
 # (contrast under 3:1, WCAG's floor for large text and controls) is refused.
 
 THEME_STYLE_OPTIONS = {
+    "title_alignment": "alignHero",
     "primary_color": "primaryColor",
     "primary_dark_color": "primaryDarkColor",
     "color_scheme": "colorScheme",
@@ -1014,7 +1052,7 @@ def _check_set_theme_style(view, args: dict) -> dict:
 
 
 def _op_set_theme_style(repo: PubliiRepository, tx, args: dict) -> Any:
-    """Give the site a presentable default look. args, one or more of: primary_color ('#rrggbb'; links, the current menu entry and the menu button), primary_dark_color (the same in dark mode), color_scheme (one of the theme's choices, e.g. 'light' when the logo is dark), heading_font, body_font, menu_font (font names the theme offers, listed in the theme's config.json), footer_text (plain text in place of 'Powered by Publii'), menu_style ('pro': a line under the header, bolder entries underlined in the primary colour on hover and on the current page, the last entry as a button; written for Publii's default theme 'simple'; 'none' removes it). Theme options are checked against the active theme; the menu style goes between markers in input/config/custom-css.css and never touches the rest of that file."""
+    """Give the site a presentable default look. args, one or more of: title_alignment (the page header, e.g. 'center', one of the theme's choices), primary_color ('#rrggbb'; links, the current menu entry and the menu button), primary_dark_color (the same in dark mode), color_scheme (one of the theme's choices, e.g. 'light' when the logo is dark), heading_font, body_font, menu_font (font names the theme offers, listed in the theme's config.json), footer_text (plain text in place of 'Powered by Publii'), menu_style ('pro': a line under the header, bolder entries underlined in the primary colour on hover and on the current page, the last entry as a button; written for Publii's default theme 'simple'; 'none' removes it). Theme options are checked against the active theme; the menu style goes between markers in input/config/custom-css.css and never touches the rest of that file."""
     view = _ApplyView(repo, tx)
     spec = _check_set_theme_style(view, args)
     if spec["theme"]:

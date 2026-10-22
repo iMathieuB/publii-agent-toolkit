@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import locale
 import logging
 import sys
+from pathlib import Path
 
 from .agent import AgentSession, CommandError, describe_operations
 from .models import SitePaths
@@ -33,13 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("ops", help="Print the command catalogue as JSON and exit.")
 
     p_read = sub.add_parser("read", help="Run one read command.")
-    p_read.add_argument("json", nargs="?", help='e.g. \'{"op":"list_posts"}\'. Omit to read stdin.')
+    p_read.add_argument("json", nargs="?", help='e.g. \'{"op":"list_posts"}\', or @file.json (UTF-8). Omit to read stdin.')
 
     p_plan = sub.add_parser("plan", help="Describe what a write batch would do.")
-    p_plan.add_argument("json", nargs="?", help="A JSON array of commands. Omit to read stdin.")
+    p_plan.add_argument("json", nargs="?", help="A JSON array of commands, or @file.json (UTF-8). Omit to read stdin.")
 
     p_apply = sub.add_parser("apply", help="Run a write batch in one transaction.")
-    p_apply.add_argument("json", nargs="?", help="A JSON array of commands. Omit to read stdin.")
+    p_apply.add_argument("json", nargs="?", help="A JSON array of commands, or @file.json (UTF-8). Omit to read stdin.")
 
     sub.add_parser("check", help="Run the integrity check and report.")
 
@@ -102,15 +104,33 @@ def _desktop(args) -> int:
         return _emit({"ok": False, "error": {"code": "desktop_error", "detail": str(exc)}})
 
 
+def _decode(data: bytes) -> str:
+    """Bytes to text, UTF-8 first. sys.stdin.read() would use the Windows code
+    page (cp1252) and turn the "é" an agent sends as UTF-8 into "Ã©"."""
+    for bom, encoding in ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if data.startswith(bom):
+            return data[len(bom):].decode(encoding)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode(locale.getpreferredencoding(False))
+
+
 def _payload(raw: str | None) -> object:
-    text = raw if raw is not None else sys.stdin.read()
+    if raw is not None and raw.startswith("@"):
+        text = _decode(Path(raw[1:]).expanduser().read_bytes())
+    else:
+        buffer = getattr(sys.stdin, "buffer", None)  # absent when stdin is replaced by a StringIO
+        text = raw if raw is not None else (_decode(buffer.read()) if buffer else sys.stdin.read())
     if not text.strip():
         raise CommandError("No JSON supplied, on the argument or on stdin.")
     return json.loads(text)
 
 
 def _emit(obj: dict) -> int:
-    json.dump(obj, sys.stdout, ensure_ascii=False, indent=2)
+    # ASCII with \u escapes: the same bytes in every console code page, and any
+    # JSON reader turns them back into the accented text.
+    json.dump(obj, sys.stdout, ensure_ascii=True, indent=2)
     sys.stdout.write("\n")
     return 0 if obj.get("ok") else 1
 
