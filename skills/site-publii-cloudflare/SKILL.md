@@ -1,6 +1,6 @@
 ---
 name: site-publii-cloudflare
-description: Met en ligne un petit site Publii (accueil, services, à propos, contact, politique de confidentialité, menu, logo, image d'accueil) sur Cloudflare R2 avec votre propre domaine, en faisant tout ce qu'un agent peut faire sur votre ordinateur et dans votre compte Cloudflare, et en vous laissant les trois gestes qui vous reviennent (les clés dans Publii, le premier rendu, la première synchro). Utilise publii-agent-toolkit pour écrire dans le site sans le briser. Demande votre permission avant chaque installation, chaque écriture et chaque publication. Déclenche pour « mets mon site Publii en ligne sur Cloudflare », « héberge mon site sur R2 », « crée les pages de mon site Publii », « monte mon site avec mon domaine ». Demande un agent qui travaille sur votre ordinateur (Claude Code, dans l'onglet Code de l'application Claude, ou un équivalent) ; dans claude.ai seul, la skill ne peut que rédiger.
+description: Met en ligne un petit site Publii (accueil, services, à propos, contact, politique de confidentialité, menu, logo, image d'accueil) sur Cloudflare R2 avec votre propre domaine, en faisant tout ce qu'un agent peut faire sur votre ordinateur et dans votre compte Cloudflare, et en vous laissant les gestes qui vous reviennent (créer le site dans Publii, autoriser Cloudflare, créer la clé et la coller dans Publii). Utilise publii-agent-toolkit pour écrire dans le site sans le briser. Demande votre permission avant chaque installation, chaque écriture et chaque publication. Déclenche pour « mets mon site Publii en ligne sur Cloudflare », « héberge mon site sur R2 », « crée les pages de mon site Publii », « monte mon site avec mon domaine ». Demande un agent qui travaille sur votre ordinateur (Claude Code, dans l'onglet Code de l'application Claude, ou un équivalent) ; dans claude.ai seul, la skill ne peut que rédiger.
 ---
 
 # Site Publii sur Cloudflare R2
@@ -10,6 +10,10 @@ Cette skill met en ligne un site Publii de cinq pages, servi par Cloudflare R2 a
 ## Avant tout : les permissions
 
 Au début, demandez à la personne ce que vous pouvez faire sans lui redemander. Si elle ne précise rien, demandez la permission avant chaque installation, chaque écriture et chaque publication. Expliquez chaque plan en mots simples avant de l'appliquer. Un refus est un refus : ne le contournez pas.
+
+Si la personne veut une permission par étape, proposez plutôt quatre accords groupés, chacun avec la liste complète de ce qu'il couvre : 1) l'installation (Python, toolkit) ; 2) l'infrastructure Cloudflare (bucket, domaine, règle de réécriture, www) ; 3) le contenu Publii (réglages du serveur, pages, menus, médias, habillage, liens) ; 4) la publication. Ces accords groupés ont bien fonctionné le 21 octobre 2026.
+
+Le déroulement qui a le mieux marché, le 21 octobre 2026 : 1) en même temps, l'installation, l'autorisation du serveur MCP et la connexion à Cloudflare dans le navigateur ; 2) l'état des lieux de Cloudflare en un seul appel ; 3) l'infrastructure (un accord), puis `set_s3_deployment` ; 4) le jeton R2 dans le navigateur, et les clés collées dans Publii par la personne, qui ferme ensuite Publii ; 5) pendant ce temps, la rédaction des textes et l'image d'accueil ; 6) le lot Publii, le lot des liens, puis `check` (un accord) ; 7) `desktop-sync`, puis la vérification des pages et des accents en ligne (un accord).
 
 Dites aussi à la personne, dès le départ, que l'application lui demandera peut-être des autorisations en chemin (lancer une commande, ouvrir une page, se connecter à Cloudflare) et qu'il faut les accorder pour que le travail avance. Réduisez ses interventions au strict nécessaire : elle intervient pour ses données sensibles (connexion, paiement, clés), pour les clics qui créent ou autorisent quelque chose, et pour approuver vos plans ; le reste, vous le faites.
 
@@ -21,7 +25,7 @@ Ce que vous ne faites jamais : lire, afficher ou recopier un secret (clé S3, mo
 2. Avoir un compte Cloudflare où le domaine est déjà une zone active (domaine acheté chez Cloudflare, ou transféré). Le domaine doit être dans le **même compte** que le bucket R2 (developers.cloudflare.com/r2/buckets/public-buckets/).
 3. Activer R2 dans le tableau de bord de Cloudflare si ce n'est pas fait : « Storage & databases », puis « R2 Object Storage », puis « Add R2 subscription to my account » ; sur la page « Activate R2 », cocher les deux cases et cliquer « Activate ». Cloudflare demande une carte au dossier (ou reprend celle qui y est déjà), même pour rester dans le forfait gratuit, et ne la charge que si les limites mensuelles sont dépassées (libellés relevés le 20 octobre 2026).
 4. Autoriser l'accès à son compte Cloudflare, dans la fenêtre que Cloudflare ouvre à l'étape 2, avec le compte du domaine.
-5. Coller les valeurs S3 dans Publii, lancer le premier rendu et la première synchro (étape 3).
+5. Cliquer pour créer la clé R2 que vous avez préparée, la coller dans Publii, enregistrer et fermer Publii (étape 3). La première publication, c'est vous qui la faites, avec le contenu (étape 6).
 
 ## 1. Vérifier l'ordinateur et installer le toolkit
 
@@ -42,9 +46,9 @@ Ce qu'un Windows neuf réserve (constaté le 20 octobre 2026 dans une machine vi
 - L'adresse en `.zip` installe le toolkit sans Git. Une adresse `git+https://` échoue quand Git n'est pas installé.
 - La publication (`desktop-sync`) passe par pywinauto, qui a besoin du Visual C++ Redistributable de Microsoft. Si `python -c "import pywinauto"` répond « DLL load failed », installez-le avec winget, avec la permission de la personne (Windows demande une confirmation).
 
-**Accents.** Passez les lots au toolkit en UTF-8 : en argument, dans un fichier (`publii-agent --site <dossier> plan @lot.json`), ou sur l'entrée standard avec le toolkit 1.3.5 ou plus récent. Avant la 1.3.5, l'entrée standard était lue dans la page de code de Windows, et « débutants » arrivait en « dÃ©butants ». Le toolkit refuse maintenant un texte lu de travers, avant toute écriture : si ce refus arrive, renvoyez le même lot par un fichier, et ne corrigez jamais les caractères à la main. Si la version installée est plus ancienne, mettez-la à jour avec la commande `pip install` ci-dessus, en ajoutant `--upgrade`.
+**Accents.** Passez les lots au toolkit en UTF-8 : en argument, dans un fichier (`publii-agent --site <dossier> plan @lot.json`), ou sur l'entrée standard avec le toolkit 1.3.5 ou plus récent. Avant la 1.3.5, l'entrée standard était lue dans la page de code de Windows, et « débutants » arrivait en « dÃ©butants ». Le toolkit refuse maintenant un texte lu de travers, avant toute écriture : si ce refus arrive, renvoyez le même lot par un fichier, et ne corrigez jamais les caractères à la main. Si la version installée est plus ancienne, mettez-la à jour avec la commande `pip install` ci-dessus, en ajoutant `--upgrade`. Après chaque publication, vérifiez les pages en ligne : aucune séquence « Ã » ni « Â » ne doit y paraître.
 
-`desktop-status` liste les sites Publii trouvés. Demandez à la personne lequel est le bon et retenez son dossier, celui qui contient `input/` : c'est la valeur de `--site`. Lisez `AGENTS.md` en entier avant la première écriture.
+`desktop-status` liste les sites Publii trouvés. Demandez à la personne lequel est le bon et retenez son dossier, celui qui contient `input/` : c'est la valeur de `--site`. Lisez `AGENTS.md` en entier avant la première écriture. Il n'est pas dans le paquet installé par pip : lisez-le à `https://raw.githubusercontent.com/iMathieuB/publii-agent-toolkit/main/AGENTS.md`. Le paquet s'importe sous le nom `publii_toolkit`.
 
 ## 2. Préparer Cloudflare
 
@@ -53,12 +57,14 @@ Vous avez besoin du serveur MCP de Cloudflare, `https://mcp.cloudflare.com/mcp` 
 Regardez d'abord si le serveur est là, et dans quel état :
 
 - **Branché et autorisé** : vérifiez avec la personne qu'il voit le bon compte, celui du domaine, puis passez à la suite.
-- **Configuré, mais il demande une authentification** : demandez à la personne de taper `/mcp` dans cette session (ou d'ouvrir le menu Connecteurs de la session), de choisir `cloudflare` et de s'authentifier. La fenêtre de Cloudflare s'ouvre dans son navigateur : elle choisit le compte du domaine et autorise.
+- **Configuré, mais il demande une authentification** : dites à la personne, mot pour mot : « Tapez `/mcp` seul, puis choisissez `cloudflare` dans la liste. Vous pouvez aussi ouvrir le menu Connecteurs de la session. » (`/mcp cloudflare` est refusé : « isn't a recognized /mcp action ».) La fenêtre de Cloudflare s'ouvre dans son navigateur : elle choisit le compte du domaine et autorise.
 - **Absent** : ajoutez-le au niveau de l'utilisateur, avec sa permission :
   ```bash
   claude mcp add --transport http --scope user cloudflare https://mcp.cloudflare.com/mcp
   ```
   Dans l'application de bureau, `claude` n'est pas dans le PATH : le programme est sous `%APPDATA%\Claude\claude-code\<version>\<dossier>\claude.exe` (prenez la version la plus récente). Un serveur ajouté ainsi n'apparaît que dans une nouvelle session. Avant de le demander, donnez à la personne une courte instruction de reprise à coller (le dossier du site, ce qui est déjà fait). Demandez-lui ensuite de quitter complètement l'application (icône près de l'horloge, Quitter), de la relancer, d'ouvrir une nouvelle session dans le même dossier, d'y coller l'instruction et de s'authentifier par `/mcp` comme ci-dessus.
+
+Demandez les deux connexions dès votre premier message, pendant l'installation : l'autorisation du serveur MCP, et la connexion à Cloudflare dans le navigateur, dont vous ouvrez vous-même la page. L'autorisation du serveur ne connecte pas le navigateur, et le jeton R2 se crée dans le navigateur : les demander ensemble évite un aller-retour. Avant toute action demandée à la personne dans le navigateur, vérifiez l'état des onglets ; avec le navigateur intégré, si son panneau est masqué, donnez tout de suite le raccourci Ctrl+Shift+B (Cmd+Shift+B sur Mac).
 
 Ne comptez pas sur un connecteur ajouté dans les paramètres de claude.ai. Le 21 octobre 2026 (application de bureau 3.1623.1, Claude Code 2.1.304), un connecteur personnalisé `mcp.cloudflare.com` ajouté et autorisé dans claude.ai n'est apparu dans aucune session de l'onglet Code, même ouverte après coup. `claude mcp add` l'a rendu visible.
 
@@ -70,22 +76,23 @@ Repli, si le serveur ne peut pas être branché : Wrangler (`npx wrangler login`
 
 Dans l'ordre, en montrant chaque opération avant de la lancer :
 
-1. **Repérer le compte et la zone** : l'identifiant du compte et celui de la zone du domaine. Si la zone n'est pas active, arrêtez-vous et dites-le.
+1. **Faire l'état des lieux, en un seul appel** : l'identifiant du compte et celui de la zone du domaine, les buckets, les règles de la zone, le routage des courriels. Si la zone n'est pas active, arrêtez-vous et dites-le.
 2. **Créer le bucket**, nommé d'après le domaine avec des traits d'union (`atelier-dupont-ca`). Si Cloudflare répond que R2 n'est pas activé, renvoyez la personne à l'étape 3 de « Ce qui revient à la personne ».
 3. **Brancher le domaine au bucket** (domaine personnalisé du bucket, par l'API R2 ou `npx wrangler r2 bucket domain add <bucket> --domain <domaine> --zone-id <zone>`). L'état passe d'« Initializing » à « Active » en quelques minutes.
 4. **Poser la règle de réécriture.** R2 ne sert pas `index.html` quand on demande un dossier : sans cette règle, la page d'accueil répond 404. Une règle de réécriture d'URL dans la phase `http_request_transform` de la zone (developers.cloudflare.com/rules/transform/url-rewrite/create-api/) :
    - expression : `ends_with(http.request.uri.path, "/")`
    - réécriture dynamique du chemin : `concat(http.request.uri.path, "index.html")`
    Si la zone a déjà un jeu de règles pour cette phase, ajoutez la règle sans effacer les autres.
+   **www**, proposé par défaut dans le plan (ou selon la fiche) : un enregistrement `AAAA` `www` vers `100::`, proxifié, et une règle de redirection 301 dans la phase `http_request_dynamic_redirect` : expression `(http.host eq "www.<domaine>")`, cible dynamique `concat("https://<domaine>", http.request.uri.path)`, `preserve_query_string: true`. Le certificat universel de la zone couvre déjà www. Essayé le 21 octobre 2026 : 301 avec le chemin et les paramètres conservés, puis 200.
 5. **Préremplir les réglages du serveur dans Publii** (toolkit 1.3.4 ou plus récent), Publii fermé. Une commande `set_s3_deployment` avec `website_url` (le domaine), `endpoint` (`https://<ID DU COMPTE>.r2.cloudflarestorage.com`, sans le nom du bucket) et `bucket` ; `region` vaut `auto` par défaut. `plan`, résumé à la personne, `apply` sur son accord. La commande écrit les valeurs que Publii écrit lui-même pour R2 et refuse les deux clés : c'est la personne qui les colle.
 6. **Obtenir les clés S3 du bucket.** Deux voies :
-   - **Tableau de bord (recommandée)** : ouvrez vous-même, dans le navigateur, la création d'un jeton R2 (R2, « Manage API Tokens », puis la création d'un jeton de compte). Remplissez le nom (par exemple `publii-<domaine>`), la permission « Object Read & Write » et la limite à ce seul bucket. La personne relit et clique le bouton de création : c'est elle qui crée la clé. Dès que la page peut afficher le secret, ne faites plus aucune capture et ne lisez plus la page, jusqu'à ce que la personne vous dise que les deux clés sont collées dans Publii : le secret ne s'affiche qu'une fois, et il ne doit passer ni dans vos captures, ni dans la conversation (developers.cloudflare.com/r2/api/tokens/).
+   - **Tableau de bord (recommandée)** : ouvrez vous-même `https://dash.cloudflare.com/<ID DU COMPTE>/r2/api-tokens/create?type=account`. La page défile pendant les premiers clics, alors vérifiez chaque choix : 1) le nom du jeton, `publii-<domaine>` ; 2) « Object Read & Write », puis vérifiez par une capture que ce n'est pas « Object Read only » qui s'est coché (c'est arrivé le 21 octobre 2026) ; 3) « Apply to specific buckets only » ; 4) tapez le nom du bucket dans le champ, puis cliquez l'option proposée dans la liste ; 5) vérifiez que « At least one bucket is required » a disparu ; 6) la personne relit et clique le bouton de création : c'est elle qui crée la clé. Dès que la page peut afficher le secret, ne faites plus aucune capture et ne lisez plus la page, jusqu'à ce que la personne vous dise que les deux clés sont collées dans Publii : le secret ne s'affiche qu'une fois, et il ne doit passer ni dans vos captures, ni dans la conversation (developers.cloudflare.com/r2/api/tokens/).
    - **API**, si votre accès le permet : la clé d'accès est l'`id` du jeton créé, le secret est l'empreinte SHA-256 de sa `value` (même page). Affichez-les une seule fois, à l'étape 3, et ne les écrivez dans aucun fichier.
    Le point de terminaison est `https://<ID DU COMPTE>.r2.cloudflarestorage.com`, sans le nom du bucket.
 
 ## 3. Ce que la personne colle dans Publii
 
-Si `set_s3_deployment` a rempli les réglages (étape 2.5), la personne n'a que les deux clés à coller. Dites-lui d'ouvrir Publii et le site, de cliquer « Server » dans la barre latérale, de coller « Access ID » et « Secret key » (étape 2.6), puis de cliquer « Save settings ». Le reste est déjà rempli : elle peut le relire avant d'enregistrer.
+Si `set_s3_deployment` a rempli les réglages (étape 2.5), la personne n'a que les deux clés à coller. Dites-lui d'ouvrir Publii et le site, de cliquer « Server » dans la barre latérale, de coller « Access ID » et « Secret key » (étape 2.6), de cliquer « Save settings », puis de fermer Publii. Le reste est déjà rempli : elle peut le relire avant d'enregistrer. Pas d'aperçu ni de synchro à ce moment : la première publication, c'est vous qui la ferez avec le contenu (étape 6), et elle servira aussi de test des clés. On évite un aller-retour, et on ne publie jamais un thème vide.
 
 Sinon (toolkit antérieur à la 1.3.4, ou commande refusée), donnez-lui toute la liste, puis attendez qu'elle vous dise que c'est fait. Les libellés sont ceux de Publii 0.48.1 (relevés le 20 octobre 2026) ; une autre version peut les formuler autrement.
 
@@ -100,11 +107,11 @@ Sinon (toolkit antérieur à la 1.3.4, ou commande refusée), donnez-lui toute l
 | Region | `auto` |
 | Prefix, Cache-Control, ACL | laisser les valeurs proposées (ACL : Public read) |
 
-Publii masque les deux clés par des points une fois tapées. Ensuite, dans Publii : Save settings, aperçu du site (premier rendu), puis « Sync your website » et le bouton du même nom dans la fenêtre qui s'ouvre. Quand la synchro est finie, la personne **ferme Publii** et vous le dit. `get_site_settings` montre alors `deployment.keys_set` à `true` : vous savez que les clés sont enregistrées, sans les avoir lues.
+Publii masque les deux clés par des points une fois tapées. Quand la personne a enregistré et **fermé Publii**, `get_site_settings` montre `deployment.keys_set` à `true` : vous savez que les clés sont enregistrées, sans les avoir lues. Le 21 octobre 2026, une personne a dit avoir fait « la première synchro » alors que seules les clés étaient enregistrées : ne vous fiez qu'à `keys_set`, puis à la publication de l'étape 6.
 
 ## 4. Vérifier la mise en ligne
 
-Demandez `https://<domaine>/`. Si la réponse est 200 avec le thème vide, tout est branché. Si la racine répond 404 alors que `/index.html` répond, la règle de réécriture ne s'applique pas : revoyez l'étape 2.4. Une erreur de certificat dans les premières minutes veut seulement dire que le domaine du bucket n'est pas encore « Active » ; attendez.
+La première vérification en ligne se fait après la première publication, à l'étape 6. Demandez `https://<domaine>/`. Si la réponse est 200, tout est branché. Si la racine répond 404 alors que `/index.html` répond, la règle de réécriture ne s'applique pas : revoyez l'étape 2.4. Une erreur de certificat dans les premières minutes veut seulement dire que le domaine du bucket n'est pas encore « Active » ; attendez.
 
 ## 5. Rédiger et créer les pages
 
@@ -112,13 +119,17 @@ Avant d'écrire, cherchez une fiche de renseignements sur le site : un fichier `
 
 Prenez des défauts raisonnables sans les demander, et annoncez-les dans votre plan : l'éditeur visuel (`tinymce`) si la personne veut modifier les pages elle-même ou ne dit rien ; aucun bandeau de témoins si elle n'a ni outil de mesure ni autre traceur ; le logo du dossier de travail s'il n'y en a qu'un. Si la skill `decouvrabilite-google-et-ia` est installée, suivez-la pour l'accueil et les services. N'inventez aucun chiffre, aucun témoignage, aucun client.
 
+Dans le thème « Simple », Publii affiche le titre de la page comme H1 : le texte (`text`) commence par un paragraphe, sans `<h1>`, et le titre de la page est le H1 que recommande `decouvrabilite-google-et-ia`.
+
+**Liens entre les pages.** Publii écrit un lien interne `#INTERNAL_LINK#/page/<id>` ; l'accueil, `#INTERNAL_LINK#/frontpage/1`. L'identifiant n'existe qu'après `create_page` : créez les pages, lisez les identifiants dans `result.applied[].result.id`, puis posez les liens par un second lot `update_post`. Annoncez les deux lots dans le même plan, et demandez un seul accord.
+
 Faites lire chaque texte à la personne et attendez son accord. Ensuite, avec le toolkit, suivez l'exemple « A worked example » d'`AGENTS.md` : `get_site_settings`, puis un seul lot qui crée les pages (`create_page`, avec `"editor":"tinymce"` sur un site neuf, sauf si la personne préfère le Markdown), les menus (`create_menu`, `add_menu_item` avec `page`), le logo (`add_media` avec `"target":"logo"`), les réglages (`update_site_settings` : `site_name`, `site_description`, `logo`, `front_page`, et le bandeau de témoins si besoin) et l'habillage (`set_theme_style`, plus bas). `plan`, résumé à la personne, `apply` sur son accord, puis `check`. Donnez-lui le chemin de la sauvegarde (`result.backup`).
 
 **Politique de confidentialité.** Rédigez-la à partir de ce que le site fait vraiment : quels renseignements il recueille (un lien courriel n'en recueille aucun par le site lui-même), qui les reçoit, combien de temps ils sont gardés, à qui écrire pour y accéder ou les faire corriger. Au Québec, la Loi 25 encadre ces renseignements : dites à la personne de faire relire la page par quelqu'un de qualifié, et ne présentez jamais votre texte comme un avis juridique.
 
 **Bandeau de témoins.** Publii en a un intégré. Activez-le seulement si le site pose des témoins ou charge un outil de mesure : un site sans traceur n'en a pas besoin. Si la fiche ne le dit pas, posez la question avec les autres.
 
-**Image hero de l'accueil.** Le thème par défaut de Publii affiche l'image à la une d'une page en grand, en haut de la page (le « hero »). Si la fiche donne déjà une image, vérifiez qu'elle convient (format, sujet, aucun texte ni faux logo) et proposez seulement son texte alternatif. Sinon, proposez-en une pour l'accueil, et attendez l'accord de la personne : ce que l'image montre et pourquoi elle convient à ce que fait l'entreprise, son format (paysage, assez grande pour un écran large, par exemple 1920 pixels de large), le texte alternatif, et une invite prête à coller dans le générateur d'images de la personne, ou des mots-clés pour une banque de photos libres de droits. Évitez le texte dans l'image, les faux logos et les visages qui pourraient passer pour de vraies personnes de l'entreprise.
+**Image hero de l'accueil.** Le thème par défaut de Publii affiche l'image à la une d'une page en grand, en haut de la page (le « hero »). Si la fiche donne déjà une image (par convention `hero.jpg` dans le dossier de travail), vérifiez qu'elle convient (format, sujet, aucun texte ni faux logo) et proposez seulement son texte alternatif. Sinon, proposez-en une pour l'accueil, et attendez l'accord de la personne : ce que l'image montre et pourquoi elle convient à ce que fait l'entreprise, son format (paysage, assez grande pour un écran large, par exemple 1920 pixels de large), le texte alternatif, et une invite prête à coller dans le générateur d'images de la personne, ou des mots-clés pour une banque de photos libres de droits. Évitez le texte dans l'image, les faux logos et les visages qui pourraient passer pour de vraies personnes de l'entreprise.
 
 Vous ne produisez pas l'image vous-même, et vous ne pilotez pas un générateur d'images dans le navigateur à la place de la personne : les conditions d'utilisation de ces services l'interdisent souvent (celles d'OpenAI excluent d'« automatically or programmatically extract data or Output »). La personne crée ou choisit l'image, la garde sur son ordinateur et vous en donne le chemin. Ouvrez-la, dites-lui si elle correspond à la proposition, et attendez son accord. Placez-la ensuite avec `add_media` (`"target":"post"`, le `slug` de l'accueil, `"featured":true`, `alt`), dans le même lot que les pages ou dans un lot à part. Le toolkit fabrique en même temps les copies réduites que le thème attend, comme Publii le fait quand on ajoute une image dans l'application : la personne n'a rien à régénérer. Si la personne ne veut pas d'image pour l'instant, passez : le thème affiche alors l'accueil sans hero.
 
@@ -142,7 +153,7 @@ publii-agent desktop-sync --name <site>            # aperçu : dit ce qui serait
 publii-agent desktop-sync --name <site> --apply    # publie, avec l'accord de la personne
 ```
 
-Publii doit être fermé au départ : le module le lance, synchronise, vérifie sur disque que la synchro a réussi, puis le referme. Annoncez la publication seulement quand le module confirme le nouveau `syncDate`. Puis demandez chaque page en ligne et vérifiez qu'elle répond 200, avec le logo et le menu.
+Publii doit être fermé au départ : le module le lance, synchronise, vérifie sur disque que la synchro a réussi, puis le referme. Annoncez la publication seulement quand le module confirme le nouveau `syncDate`. C'est aussi le test des clés : si la synchro échoue sur l'accès au bucket, demandez à la personne de recoller les deux clés dans Publii. Puis demandez chaque page en ligne et vérifiez qu'elle répond 200, avec le logo, le menu et des accents intacts, et que `www.<domaine>` redirige vers l'adresse sans www.
 
 ## 7. Le compte rendu
 

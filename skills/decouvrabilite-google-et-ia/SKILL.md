@@ -31,6 +31,8 @@ Avant d'écrire, obtenez ces réponses. Ce qui manque reste marqué `[À COMPLÉ
 
 **Le titre principal (H1)** dit ce que fait l'entreprise et, si c'est utile, où. « Réparation de vélos à Québec », pas « Bienvenue ». Un seul H1 par page.
 
+Sur Publii, avec le thème par défaut (« Simple »), le H1 est le titre de la page : le thème l'affiche lui-même. Choisissez donc ce titre comme le H1 recommandé, et faites commencer le texte de la page par le premier paragraphe, sans `<h1>` : sinon la page en aurait deux.
+
 **Le premier paragraphe répond seul** à la question « qu'est-ce que c'est et pour qui ? », en 40 à 60 mots. C'est souvent ce passage qu'un moteur ou une IA reprend.
 
 **Chaque section (H2) se comprend lue seule.** Un titre de section est une question que le client se pose ou une affirmation complète (« Combien de temps prend une mise au point »), et la première phrase de la section y répond directement. Les détails viennent après.
@@ -59,7 +61,7 @@ Quand la personne fournit un texte, travaillez section par section. Pour chaque 
 
 ## 5. La livraison
 
-- Le texte complet de la page, dans le format qu'elle utilisera : HTML simple (`<h1>`, `<h2>`, `<p>`, `<ul>`, `<a>`) pour l'éditeur visuel de Publii ou d'un autre outil, ou Markdown. Aucun style en ligne, aucune balise inutile.
+- Le texte complet de la page, dans le format qu'elle utilisera : HTML simple (`<h2>`, `<p>`, `<ul>`, `<a>`, et `<h1>` seulement si l'outil n'affiche pas déjà le titre de la page en H1, ce que fait Publii) pour l'éditeur visuel de Publii ou d'un autre outil, ou Markdown. Aucun style en ligne, aucune balise inutile.
 - Le `metaTitle` et la `metaDesc`, avec leur nombre de caractères.
 - La liste des `[À COMPLÉTER]` qui restent, et des faits à vérifier par la personne.
 - Une liste de contrôle cochée : H1 unique, premier paragraphe qui répond seul, H2 lisibles seuls, aucun chiffre sans source, appel à l'action, liens internes, textes d'images.
