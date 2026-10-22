@@ -5,6 +5,10 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+
+- `desktop-sync` checks that Publii is really in the foreground before every real mouse click, with a minimize-and-restore fallback, and refuses to click otherwise. Windows sometimes ignores `set_focus()` without an error; the click then landed on the window in front, the site list never opened, and the sync failed with "absent from the site list" (seen twice on 2026-10-22).
+
 ## [1.3.6] — 2026-10-22
 
 ### Changed

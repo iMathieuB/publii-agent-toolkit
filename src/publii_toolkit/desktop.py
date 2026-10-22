@@ -309,7 +309,39 @@ class PubliiDesktop:
                 raise DesktopError(f"Refused to click a destructive element: {actual!r}")
         if expected_text.lower() not in lowered:
             raise DesktopError(f"Refused to click: expected {expected_text!r}, found {actual!r}")
+        top = getattr(element, "top_level_parent", None)
+        if top is not None:
+            cls._ensure_foreground(top())
         element.click_input()
+
+    @staticmethod
+    def _ensure_foreground(window) -> None:
+        """Bring Publii to the front, and check it, before any real mouse click.
+
+        click_input() is a real Windows click: it lands on whatever window is in
+        front, not on the one targeted. Windows sometimes refuses set_focus()
+        silently (foreground lock). Seen on 2026-10-22: Publii opened behind the
+        terminal, the click on the site header never opened the site list, and
+        the sync failed twice with "absent from the site list". Fallback:
+        minimize then restore, which Windows accepts. If Publii is still not in
+        front, do not click.
+        """
+        if sys.platform != "win32" or not hasattr(window, "handle"):
+            return
+        import ctypes
+        user32 = ctypes.windll.user32
+        for attempt in range(3):
+            if attempt:
+                window.minimize()
+                time.sleep(0.8)
+                window.restore()
+                time.sleep(0.8)
+            window.set_focus()
+            time.sleep(0.5)
+            if user32.GetForegroundWindow() == window.handle:
+                return
+        raise DesktopError("Publii refuses to come to the foreground: click cancelled. "
+                           "Keep the Publii window visible and retry.")
 
     def _current_site_display(self, window) -> str | None:
         known = set(self.display_names())
@@ -343,6 +375,7 @@ class PubliiDesktop:
             header = self._find(window.descendants(), current, control_types=SITE_HEADER_TYPES, exact=True)
             if header is None:
                 raise DesktopError(f"Header for site {current!r} not found.")
+            self._ensure_foreground(window)
             header.click_input()
         # current is None when no site is open: Publii starts on the last site
         # opened, read from its own localStorage (src/components/App.vue), and
