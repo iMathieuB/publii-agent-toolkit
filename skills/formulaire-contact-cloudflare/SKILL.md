@@ -12,6 +12,8 @@ Selon la documentation de Cloudflare, l'envoi vers une adresse de destination v�
 ## Avant tout : les permissions et les règles
 
 - Demandez une permission avant chaque installation, chaque écriture dans le site, chaque création dans Cloudflare et chaque mise en ligne. Montrez le code du Worker avant de le déployer.
+- Dans l'application Claude, le mode de permission automatique (« Auto », proposé par défaut) peut arrêter la création du widget Turnstile, le déploiement du Worker ou la pose de la route tant que la personne n'a pas donné son accord explicite dans la conversation. Ce n'est pas Cloudflare qui bloque : ne l'attribuez pas à Cloudflare. Avant ces créations, montrez en un seul message tout ce que vous allez créer (widget, secret, Worker, route) et demandez un oui explicite. Si l'instruction de départ de la personne contient déjà cet accord, rappelez-le et continuez. Si l'application bloque quand même, rapportez son message tel quel et redemandez l'accord, sans chercher à contourner le blocage.
+- Le serveur MCP de Cloudflare d'abord, pour tout ce qu'il sait faire ; le navigateur seulement pour ce qu'il ne fait pas. Quand il faut une page du tableau de bord, ouvrez-la vous-même, au bon endroit, préremplie : la personne n'intervient que pour ses données sensibles et les clics qui créent ou autorisent.
 - Le secret Turnstile ne s'écrit dans aucun fichier : il va dans les secrets du Worker (`npx wrangler secret put TURNSTILE_SECRET`). Ne l'affichez qu'une fois, au moment de le poser.
 - Si le site est un site Publii, toute écriture dans le site passe par `publii-agent-toolkit` (voir la skill `site-publii-cloudflare`), jamais par une édition directe des fichiers.
 - Un formulaire recueille des renseignements personnels. Au Québec, la Loi 25 encadre leur collecte : informer la personne au moment de la collecte, publier une politique de confidentialité, nommer un responsable. Rédigez à partir de ce que le formulaire fait vraiment, et dites à la personne de faire relire la politique par quelqu'un de qualifié. Ce texte n'est pas un avis juridique.
@@ -39,7 +41,7 @@ npx wrangler email routing addresses create <adresse>     # envoie le courriel d
 npx wrangler email routing addresses list                 # la date de vérification apparaît après le clic
 ```
 
-Sinon, par le serveur MCP de Cloudflare ou par le tableau de bord avec la personne (developers.cloudflare.com/email-service/configuration/email-routing-addresses/).
+Si le serveur MCP de Cloudflare est branché, servez-vous-en plutôt (API Email Routing) : il évite une deuxième connexion par Wrangler. Sinon, ouvrez vous-même la page Email Routing du tableau de bord (developers.cloudflare.com/email-service/configuration/email-routing-addresses/).
 
 Si la personne a accès à plusieurs comptes Cloudflare, fixez celui du domaine à chaque commande : `account_id` dans `wrangler.toml`, ou la variable `CLOUDFLARE_ACCOUNT_ID`. Pour défaire une connexion faite dans un profil nommé (`wrangler auth create`), utilisez `wrangler auth delete <profil>`, jamais `wrangler logout` : cette commande déconnecte le profil par défaut, même quand un autre profil est actif.
 
@@ -51,7 +53,7 @@ Créer un widget Turnstile : nom du site, domaine du site, mode « Managed », *
 npx wrangler turnstile widget create <nom> --domain <domaine> --mode managed --clearance-level no_clearance --json
 ```
 
-La sortie JSON contient la clé secrète. Ne l'affichez pas : lisez-la dans un script qui la passe directement à `npx wrangler secret put TURNSTILE_SECRET` par l'entrée standard, après le déploiement du Worker. Sinon, créez le widget dans le tableau de bord (Turnstile, ajouter un widget) et laissez la personne coller la clé secrète elle-même.
+La sortie JSON contient la clé secrète. Ne l'affichez pas : lisez-la dans un script qui la passe directement à `npx wrangler secret put TURNSTILE_SECRET` par l'entrée standard, après le déploiement du Worker. Le serveur MCP de Cloudflare peut aussi créer le widget (API Turnstile, même règle : la clé secrète ne s'affiche pas). Sinon, ouvrez vous-même la création d'un widget dans le tableau de bord (Turnstile, ajouter un widget), préremplie, et laissez la personne la créer et coller la clé secrète elle-même.
 
 ## 3. Le Worker
 
@@ -68,7 +70,7 @@ Une route ne s'exécute que si le nom d'hôte a un enregistrement DNS proxifié.
 Déploiement avec Wrangler (Node.js requis ; s'il manque, sous Windows : `winget install OpenJS.NodeJS.LTS`, avec permission) :
 
 ```bash
-npx wrangler login                          # la personne autorise, avec le compte du domaine
+npx wrangler login                          # ouvre une fenêtre d'autorisation : la personne autorise, avec le compte du domaine
 npx wrangler secret put TURNSTILE_SECRET    # coller la clé secrète Turnstile
 npx wrangler deploy
 ```

@@ -11,6 +11,8 @@ Cette skill met en ligne un site Publii de cinq pages, servi par Cloudflare R2 a
 
 Au début, demandez à la personne ce que vous pouvez faire sans lui redemander. Si elle ne précise rien, demandez la permission avant chaque installation, chaque écriture et chaque publication. Expliquez chaque plan en mots simples avant de l'appliquer. Un refus est un refus : ne le contournez pas.
 
+Dites aussi à la personne, dès le départ, que l'application lui demandera peut-être des autorisations en chemin (lancer une commande, ouvrir une page, se connecter à Cloudflare) et qu'il faut les accorder pour que le travail avance. Réduisez ses interventions au strict nécessaire : elle intervient pour ses données sensibles (connexion, paiement, clés), pour les clics qui créent ou autorisent quelque chose, et pour approuver vos plans ; le reste, vous le faites.
+
 Ce que vous ne faites jamais : lire, afficher ou recopier un secret (clé S3, mot de passe, jeton) ailleurs qu'à l'endroit où la personne doit le coller ; ouvrir `site.config.json` ; écrire dans un fichier du site sans passer par le toolkit ; acheter quoi que ce soit.
 
 ## Ce qui revient à la personne
@@ -58,7 +60,9 @@ Regardez d'abord si le serveur est là, et dans quel état :
 
 Ne comptez pas sur un connecteur ajouté dans les paramètres de claude.ai. Le 21 octobre 2026 (application de bureau 3.1623.1, Claude Code 2.1.304), un connecteur personnalisé `mcp.cloudflare.com` ajouté et autorisé dans claude.ai n'est apparu dans aucune session de l'onglet Code, même ouverte après coup. `claude mcp add` l'a rendu visible.
 
-Repli, si le serveur ne peut pas être branché : Wrangler (`npx wrangler login`, avec sa permission) crée le bucket et branche le domaine, mais il ne pose pas la règle de réécriture ; celle-ci se fait alors avec la personne, dans le tableau de bord. Ne pilotez pas le tableau de bord de Cloudflare dans le navigateur à la place du serveur sans l'avoir d'abord proposé à la personne.
+Le serveur MCP d'abord, pour tout ce qu'il sait faire. Le navigateur (Claude in Chrome, ou le navigateur intégré de l'application) sert seulement à ce que l'API ne fait pas, ou à ce qui revient à la personne. Dans ce cas, ouvrez vous-même la bonne page, au bon endroit, et préremplissez ce qui peut l'être : ne lui demandez ni de naviguer, ni d'afficher une fenêtre, ni de vous dire quand la page est prête.
+
+Repli, si le serveur ne peut pas être branché : Wrangler (`npx wrangler login`, avec sa permission) crée le bucket et branche le domaine, mais il ne pose pas la règle de réécriture ; celle-ci se fait alors dans le tableau de bord, que vous ouvrez dans le navigateur à la bonne page.
 
 Dans l'ordre, en montrant chaque opération avant de la lancer :
 
@@ -71,7 +75,7 @@ Dans l'ordre, en montrant chaque opération avant de la lancer :
    Si la zone a déjà un jeu de règles pour cette phase, ajoutez la règle sans effacer les autres.
 5. **Préremplir les réglages du serveur dans Publii** (toolkit 1.3.4 ou plus récent), Publii fermé. Une commande `set_s3_deployment` avec `website_url` (le domaine), `endpoint` (`https://<ID DU COMPTE>.r2.cloudflarestorage.com`, sans le nom du bucket) et `bucket` ; `region` vaut `auto` par défaut. `plan`, résumé à la personne, `apply` sur son accord. La commande écrit les valeurs que Publii écrit lui-même pour R2 et refuse les deux clés : c'est la personne qui les colle.
 6. **Obtenir les clés S3 du bucket.** Deux voies :
-   - **Tableau de bord (recommandée)** : la personne ouvre R2, « Manage API Tokens », crée un jeton de compte avec la permission « Object Read & Write » limitée à ce bucket, et garde la page ouverte : le secret ne s'affiche qu'une fois (developers.cloudflare.com/r2/api/tokens/).
+   - **Tableau de bord (recommandée)** : ouvrez vous-même, dans le navigateur, la création d'un jeton R2 (R2, « Manage API Tokens », puis la création d'un jeton de compte). Remplissez le nom (par exemple `publii-<domaine>`), la permission « Object Read & Write » et la limite à ce seul bucket. La personne relit et clique le bouton de création : c'est elle qui crée la clé. Dès que la page peut afficher le secret, ne faites plus aucune capture et ne lisez plus la page, jusqu'à ce que la personne vous dise que les deux clés sont collées dans Publii : le secret ne s'affiche qu'une fois, et il ne doit passer ni dans vos captures, ni dans la conversation (developers.cloudflare.com/r2/api/tokens/).
    - **API**, si votre accès le permet : la clé d'accès est l'`id` du jeton créé, le secret est l'empreinte SHA-256 de sa `value` (même page). Affichez-les une seule fois, à l'étape 3, et ne les écrivez dans aucun fichier.
    Le point de terminaison est `https://<ID DU COMPTE>.r2.cloudflarestorage.com`, sans le nom du bucket.
 
@@ -100,17 +104,29 @@ Demandez `https://<domaine>/`. Si la réponse est 200 avec le thème vide, tout 
 
 ## 5. Rédiger et créer les pages
 
-Avant d'écrire, posez les questions qui manquent, en une fois : nom de l'entreprise, ce qu'elle fait, pour qui, où, comment on la joint, l'action attendue du visiteur, le ton (vous ou tu), les sujets à éviter. Si la skill `decouvrabilite-google-et-ia` est installée, suivez-la pour l'accueil et les services. N'inventez aucun chiffre, aucun témoignage, aucun client.
+Avant d'écrire, cherchez une fiche de renseignements sur le site : un fichier `fiche_site.md`, ou d'un nom semblable, dans le dossier de travail ou dans celui que la personne indique. Lisez-la et partez de ses réponses. Ne posez ensuite, en un seul message, que les questions auxquelles elle ne répond pas, parmi celles-ci : nom de l'entreprise à afficher, ce qu'elle fait, pour qui, où, comment on la joint, l'action attendue du visiteur, le ton (vous ou tu), les sujets à éviter, le parcours pour la page À propos, le logo, l'image d'accueil. Sans fiche, posez-les toutes, en une fois.
 
-Faites lire chaque texte à la personne et attendez son accord. Ensuite, avec le toolkit, suivez l'exemple « A worked example » d'`AGENTS.md` : `get_site_settings`, puis un seul lot qui crée les pages (`create_page`, avec `"editor":"tinymce"` sur un site neuf, sauf si la personne préfère le Markdown), les menus (`create_menu`, `add_menu_item` avec `page`), le logo (`add_media` avec `"target":"logo"`) et les réglages (`update_site_settings` : `site_name`, `site_description`, `logo`, `front_page`, et le bandeau de témoins si besoin). `plan`, résumé à la personne, `apply` sur son accord, puis `check`. Donnez-lui le chemin de la sauvegarde (`result.backup`).
+Prenez des défauts raisonnables sans les demander, et annoncez-les dans votre plan : l'éditeur visuel (`tinymce`) si la personne veut modifier les pages elle-même ou ne dit rien ; aucun bandeau de témoins si elle n'a ni outil de mesure ni autre traceur ; le logo du dossier de travail s'il n'y en a qu'un. Si la skill `decouvrabilite-google-et-ia` est installée, suivez-la pour l'accueil et les services. N'inventez aucun chiffre, aucun témoignage, aucun client.
+
+Faites lire chaque texte à la personne et attendez son accord. Ensuite, avec le toolkit, suivez l'exemple « A worked example » d'`AGENTS.md` : `get_site_settings`, puis un seul lot qui crée les pages (`create_page`, avec `"editor":"tinymce"` sur un site neuf, sauf si la personne préfère le Markdown), les menus (`create_menu`, `add_menu_item` avec `page`), le logo (`add_media` avec `"target":"logo"`), les réglages (`update_site_settings` : `site_name`, `site_description`, `logo`, `front_page`, et le bandeau de témoins si besoin) et l'habillage (`set_theme_style`, plus bas). `plan`, résumé à la personne, `apply` sur son accord, puis `check`. Donnez-lui le chemin de la sauvegarde (`result.backup`).
 
 **Politique de confidentialité.** Rédigez-la à partir de ce que le site fait vraiment : quels renseignements il recueille (un lien courriel n'en recueille aucun par le site lui-même), qui les reçoit, combien de temps ils sont gardés, à qui écrire pour y accéder ou les faire corriger. Au Québec, la Loi 25 encadre ces renseignements : dites à la personne de faire relire la page par quelqu'un de qualifié, et ne présentez jamais votre texte comme un avis juridique.
 
-**Bandeau de témoins.** Publii en a un intégré. Activez-le seulement si le site pose des témoins ou charge un outil de mesure : un site sans traceur n'en a pas besoin. Posez la question à la personne et notez sa réponse.
+**Bandeau de témoins.** Publii en a un intégré. Activez-le seulement si le site pose des témoins ou charge un outil de mesure : un site sans traceur n'en a pas besoin. Si la fiche ne le dit pas, posez la question avec les autres.
 
-**Image hero de l'accueil.** Le thème par défaut de Publii affiche l'image à la une d'une page en grand, en haut de la page (le « hero »). Proposez-en une pour l'accueil, et attendez l'accord de la personne : ce que l'image montre et pourquoi elle convient à ce que fait l'entreprise, son format (paysage, assez grande pour un écran large, par exemple 1920 pixels de large), le texte alternatif, et une invite prête à coller dans le générateur d'images de la personne, ou des mots-clés pour une banque de photos libres de droits. Évitez le texte dans l'image, les faux logos et les visages qui pourraient passer pour de vraies personnes de l'entreprise.
+**Image hero de l'accueil.** Le thème par défaut de Publii affiche l'image à la une d'une page en grand, en haut de la page (le « hero »). Si la fiche donne déjà une image, vérifiez qu'elle convient (format, sujet, aucun texte ni faux logo) et proposez seulement son texte alternatif. Sinon, proposez-en une pour l'accueil, et attendez l'accord de la personne : ce que l'image montre et pourquoi elle convient à ce que fait l'entreprise, son format (paysage, assez grande pour un écran large, par exemple 1920 pixels de large), le texte alternatif, et une invite prête à coller dans le générateur d'images de la personne, ou des mots-clés pour une banque de photos libres de droits. Évitez le texte dans l'image, les faux logos et les visages qui pourraient passer pour de vraies personnes de l'entreprise.
 
 Vous ne produisez pas l'image vous-même, et vous ne pilotez pas un générateur d'images dans le navigateur à la place de la personne : les conditions d'utilisation de ces services l'interdisent souvent (celles d'OpenAI excluent d'« automatically or programmatically extract data or Output »). La personne crée ou choisit l'image, la garde sur son ordinateur et vous en donne le chemin. Ouvrez-la, dites-lui si elle correspond à la proposition, et attendez son accord. Placez-la ensuite avec `add_media` (`"target":"post"`, le `slug` de l'accueil, `"featured":true`, `alt`), dans le même lot que les pages ou dans un lot à part. Le toolkit fabrique en même temps les copies réduites que le thème attend, comme Publii le fait quand on ajoute une image dans l'application : la personne n'a rien à régénérer. Si la personne ne veut pas d'image pour l'instant, passez : le thème affiche alors l'accueil sans hero.
+
+**Habillage du site.** Sans réglage, le thème par défaut garde sa couleur rouge, un menu en texte simple et « Powered by Publii » au pied de page. Proposez un habillage dans le même lot que les pages, et annoncez-le dans le plan, avec `set_theme_style` (toolkit 1.3.4 ou plus récent) :
+
+- `primary_color` : une couleur tirée du logo (ouvrez-le), assez foncée pour du texte blanc ; le toolkit refuse une couleur sous un contraste de 3:1 ;
+- `color_scheme` à `light` si le logo est foncé sur un fond transparent, sinon le mode sombre du thème le rendrait illisible ;
+- une police de titres franche parmi celles que le thème propose (`heading_font`, par exemple `montserrat`), et `menu_font` à `var(--heading-font)` pour l'appliquer au menu ;
+- `footer_text` : par exemple « © <année> <entreprise> », à la place de « Powered by Publii » ;
+- `menu_style` à `pro` : un trait sous l'en-tête, la page active soulignée de la couleur principale, et la dernière entrée du menu en bouton. Placez donc Contact en dernier dans le menu.
+
+Ce style de menu est écrit pour le thème par défaut, « Simple » : sur un autre thème, le toolkit le refuse, et vous n'appliquez que la couleur et les polices. Le thème sert lui-même ses polices : rien n'est chargé depuis Google.
 
 ## 6. Publier
 

@@ -505,3 +505,104 @@ def test_the_logo_gets_no_copies(site_root, tmp_path, images):
     out = AgentSession(str(site_root)).apply([
         {"op": "add_media", "file": str(images["logo.png"]), "target": "logo"}])
     assert out["result"]["applied"][0]["result"]["responsive"] is None
+
+
+# ------------------------------------------------------------------ theme style
+
+THEME_OPTIONS = [
+    {"name": "colorScheme", "type": "radio", "value": "auto",
+     "options": [{"value": "auto"}, {"value": "light"}, {"value": "dark"}]},
+    {"name": "primaryColor", "type": "colorpicker", "value": "#D73A42"},
+    {"name": "primaryDarkColor", "type": "colorpicker", "value": "#FFC074"},
+    {"name": "fontHeadings", "type": "select", "value": "system-ui",
+     "options": [{"value": "system-ui"}, {"value": "montserrat"}, {"value": "lora"}]},
+    {"name": "fontMenu", "type": "select", "value": "var(--body-font)",
+     "options": [{"value": "system-ui"}, {"value": "var(--body-font)"}, {"value": "var(--heading-font)"}]},
+    {"name": "copyrightText", "type": "wysiwyg", "value": "Powered by Publii"},
+]
+
+
+def with_theme_options(root: Path) -> None:
+    path = root / "input" / "themes" / "simple" / "config.json"
+    data = json.loads(path.read_text("utf-8"))
+    data["customConfig"] = THEME_OPTIONS
+    path.write_text(json.dumps(data), encoding="utf-8")
+    site = root / "input" / "config" / "site.config.json"
+    cfg = json.loads(site.read_text("utf-8"))
+    cfg["theme"] = "simple"
+    site.write_text(json.dumps(cfg), encoding="utf-8")
+
+
+def custom_css(root: Path) -> str:
+    path = root / "input" / "config" / "custom-css.css"
+    return path.read_text("utf-8") if path.is_file() else ""
+
+
+def test_the_look_is_written_to_the_theme_and_the_custom_css(site_root):
+    with_theme_options(site_root)
+    (site_root / "input" / "config" / "custom-css.css").write_text(".mine{color:red}\n", encoding="utf-8")
+    (site_root / "input" / "config" / "theme.config.json").write_text(
+        json.dumps({"config": {"logo": "media/website/logo.png"}}), encoding="utf-8")
+    out = AgentSession(str(site_root)).apply([{
+        "op": "set_theme_style", "primary_color": "#1B5FA8", "color_scheme": "light",
+        "heading_font": "montserrat", "menu_font": "var(--heading-font)",
+        "footer_text": "© Atelier <Dupont>", "menu_style": "pro"}])
+    assert out["ok"], out
+    theme = theme_config(site_root)
+    assert theme["config"] == {"logo": "media/website/logo.png"}
+    assert theme["customConfig"] == {
+        "primaryColor": "#1b5fa8", "colorScheme": "light", "fontHeadings": "montserrat",
+        "fontMenu": "var(--heading-font)", "copyrightText": "<p>© Atelier &lt;Dupont&gt;</p>"}
+    css = custom_css(site_root)
+    assert css.startswith(".mine{color:red}\n\n/* publii-agent-toolkit: menu style, start.")
+    assert css.count("menu style, start") == 1 and "li:last-child>a{background:var(--color)" in css
+
+
+def test_the_menu_block_is_replaced_not_stacked_and_can_be_removed(site_root):
+    with_theme_options(site_root)
+    (site_root / "input" / "config" / "custom-css.css").write_text(".mine{color:red}\n", encoding="utf-8")
+    for _ in range(2):
+        assert AgentSession(str(site_root)).apply([{"op": "set_theme_style", "menu_style": "pro"}])["ok"]
+    assert custom_css(site_root).count("menu style, start") == 1
+    assert AgentSession(str(site_root)).apply([{"op": "set_theme_style", "menu_style": "none"}])["ok"]
+    assert custom_css(site_root) == ".mine{color:red}\n"
+
+
+@pytest.mark.parametrize("bad", [
+    {"primary_color": "blue"},
+    {"primary_color": "#12345"},
+    {"heading_font": "comic-sans"},
+    {"color_scheme": "neon"},
+    {"body_font": "lora"},                       # the fixture theme declares no fontBody
+    {"footer_text": ""},
+    {"footer_text": "x" * 301},
+    {"menu_style": "fancy"},
+    {"primary_color": "#ffd84d", "menu_style": "pro"},   # too light for white text
+    {"customCSS": "body{}"},
+    {},
+])
+def test_bad_style_arguments_are_refused(site_root, bad):
+    with_theme_options(site_root)
+    before = (site_root / "input" / "config" / "theme.config.json").read_bytes()
+    session = AgentSession(str(site_root))
+    assert not session.plan([{"op": "set_theme_style", **bad}])["ok"], bad
+    assert not session.apply([{"op": "set_theme_style", **bad}])["ok"], bad
+    assert (site_root / "input" / "config" / "theme.config.json").read_bytes() == before
+    assert custom_css(site_root) == ""
+
+
+def test_the_menu_style_is_only_for_the_default_theme(site_root):
+    with_theme_options(site_root)
+    site = site_root / "input" / "config" / "site.config.json"
+    cfg = json.loads(site.read_text("utf-8"))
+    cfg["theme"] = "other"
+    site.write_text(json.dumps(cfg), encoding="utf-8")
+    out = AgentSession(str(site_root)).apply([{"op": "set_theme_style", "menu_style": "pro"}])
+    assert not out["ok"] and "simple" in json.dumps(out)
+
+
+def test_the_plan_describes_the_look(site_root):
+    with_theme_options(site_root)
+    out = AgentSession(str(site_root)).plan([{"op": "set_theme_style", "primary_color": "#1b5fa8", "menu_style": "pro"}])
+    assert out["ok"] and "set the site's look" in out["result"]["steps"][0]["describes"]
+    assert custom_css(site_root) == ""

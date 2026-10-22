@@ -68,6 +68,10 @@ SITE_CONFIG = "site.config.json"
 # renderer reads theme.config.json. A brand-new site has it as "{}", and the
 # renderer falls back to the theme defaults for every key it does not hold.
 THEME_CONFIG = "theme.config.json"
+# The stylesheet Publii's Tools, Custom CSS edits. The renderer reads it from
+# input/config (Site.loadCustomCSS in Publii 0.48.1) and adds it after the
+# theme's own CSS. It does not exist until something is written to it.
+CUSTOM_CSS = "custom-css.css"
 
 
 def now_ms() -> int:
@@ -461,6 +465,7 @@ class PubliiTransaction:
         self._backup_dir: Path | None = None
         self._staged: dict[Path, Path] = {}      # target -> tmp path
         self._json_cache: dict[Path, Any] = {}   # target -> current (staged) data
+        self._text_cache: dict[Path, str] = {}   # same, for custom-css.css
         # Media files are not part of the input/ backup (it covers db.sqlite and
         # config/ only), so they are staged and tracked separately: copied to a
         # temp name first, moved into place just before COMMIT, deleted on abort.
@@ -631,6 +636,27 @@ class PubliiTransaction:
 
     def current_site_config(self) -> dict:
         return self._current_json(self.paths.config_dir / SITE_CONFIG, default={})
+
+    def current_custom_css(self) -> str:
+        path = self.paths.config_dir / CUSTOM_CSS
+        if path in self._text_cache:
+            return self._text_cache[path]
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+
+    def set_custom_css(self, css: str) -> None:
+        """Stage the whole of input/config/custom-css.css, swapped in after COMMIT.
+
+        Which CSS goes in is the caller's decision: the agent layer only rewrites
+        the block between its own markers and keeps the rest of the file.
+        """
+        path = self.paths.config_dir / CUSTOM_CSS
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(css)
+            f.flush()
+            os.fsync(f.fileno())
+        self._staged[path] = tmp
+        self._text_cache[path] = css
 
     def current_theme_config(self) -> dict:
         return self._current_json(self.paths.config_dir / THEME_CONFIG, default={})

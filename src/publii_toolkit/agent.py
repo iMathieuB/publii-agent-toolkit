@@ -41,6 +41,7 @@ so an agent never has to parse prose to find out what happened.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import re
@@ -56,6 +57,7 @@ from urllib.parse import urlsplit
 from . import images
 from .models import CoreMeta, Menu, MenuItem, Post, PostAdditionalData
 from .repository import (
+    CUSTOM_CSS,
     SITE_CONFIG,
     THEME_CONFIG,
     PubliiIntegrityError,
@@ -288,6 +290,10 @@ class _PlanView:
     def theme_config(self) -> dict:
         return self.repo.read_theme_config()
 
+    def custom_css(self) -> str:
+        path = self.input_dir / "config" / CUSTOM_CSS
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+
     def media_present(self, path: Path) -> bool:
         return path.resolve() in self.pending_media or path.is_file()
 
@@ -328,6 +334,9 @@ class _ApplyView:
 
     def theme_config(self) -> dict:
         return self.tx.current_theme_config()
+
+    def custom_css(self) -> str:
+        return self.tx.current_custom_css()
 
     def media_present(self, path: Path) -> bool:
         return path.resolve() in self.tx.staged_media() or path.is_file()
@@ -876,6 +885,145 @@ def _op_set_s3_deployment(repo: PubliiRepository, tx, args: dict) -> Any:
     return {"updated": spec["shown"]}
 
 
+# -- set_theme_style ---------------------------------------------------------- #
+# A presentable default look, in two parts.
+#
+# Theme options go in theme.config.json customConfig, checked against what the
+# active theme declares in its own config.json: an option the theme does not
+# have is refused, a select or radio value must be one of its options, a colour
+# must be a #rrggbb code. Publii merges the theme defaults over whatever
+# customConfig leaves out.
+#
+# The menu style is a stylesheet block written for Publii's default theme,
+# "Simple" (3.x: .top header, .navbar__menu, li.active, var(--color) for the
+# primary colour). It lives between markers in input/config/custom-css.css, the
+# file Publii's Tools, Custom CSS edits, so the rest of that file is never
+# touched; "none" removes the block. The last menu entry becomes a button in
+# the primary colour with white text, so a colour too light for white text
+# (contrast under 3:1, WCAG's floor for large text and controls) is refused.
+
+THEME_STYLE_OPTIONS = {
+    "primary_color": "primaryColor",
+    "primary_dark_color": "primaryDarkColor",
+    "color_scheme": "colorScheme",
+    "heading_font": "fontHeadings",
+    "body_font": "fontBody",
+    "menu_font": "fontMenu",
+}
+THEME_STYLE_ARGS = (*THEME_STYLE_OPTIONS, "footer_text", "menu_style")
+MENU_STYLES = ("pro", "none")
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+CSS_START = "/* publii-agent-toolkit: menu style, start. Rewritten by set_theme_style. */"
+CSS_END = "/* publii-agent-toolkit: menu style, end. */"
+MENU_STYLE_CSS = """.top{border-bottom:1px solid rgba(23,24,30,.08);box-shadow:0 2px 12px rgba(23,24,30,.05)}
+@media (min-width:56.25em){
+.navbar .navbar__menu{align-items:center}
+.navbar .navbar__menu>li>a{position:relative;font-weight:600;font-variation-settings:"wght" 600;letter-spacing:.01em;padding:.4rem .9rem}
+.navbar .navbar__menu>li:not(:last-child)>a::after{content:"";position:absolute;left:.9rem;right:.9rem;bottom:0;height:2px;border-radius:2px;background:var(--color);transform:scaleX(0);transform-origin:left;transition:transform .25s ease-out}
+.navbar .navbar__menu>li:not(:last-child)>a:hover::after,.navbar .navbar__menu>li:not(:last-child)>a:focus-visible::after,.navbar .navbar__menu>li.active:not(:last-child)>a::after{transform:scaleX(1)}
+.navbar .navbar__menu>li.active>a{color:var(--color)}
+.navbar .navbar__menu>li:last-child{margin-left:.75rem}
+.navbar .navbar__menu>li:last-child>a{background:var(--color);color:#fff;border-radius:999px;padding:.55rem 1.4rem;box-shadow:0 2px 10px rgba(0,0,0,.12);transition:filter .2s ease-out,transform .2s ease-out}
+.navbar .navbar__menu>li:last-child>a:hover,.navbar .navbar__menu>li:last-child>a:focus{color:#fff;filter:brightness(1.1);transform:translateY(-1px)}
+}"""
+
+
+def _contrast_with_white(hex_color: str) -> float:
+    def channel(c: int) -> float:
+        s = c / 255
+        return s / 12.92 if s <= 0.03928 else ((s + 0.055) / 1.055) ** 2.4
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    lum = 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    return 1.05 / (lum + 0.05)
+
+
+def _theme_option(manifest: dict, name: str) -> dict | None:
+    for option in manifest.get("customConfig") or []:
+        if isinstance(option, dict) and option.get("name") == name:
+            return option
+    return None
+
+
+def _with_menu_block(css: str, block: str | None) -> str:
+    pattern = re.compile(re.escape(CSS_START) + r".*?" + re.escape(CSS_END) + r"\n?", re.S)
+    rest = pattern.sub("", css).rstrip()
+    if block is None:
+        return rest + "\n" if rest else ""
+    return (rest + "\n\n" if rest else "") + f"{CSS_START}\n{block}\n{CSS_END}\n"
+
+
+def _check_set_theme_style(view, args: dict) -> dict:
+    extra = sorted(set(args) - set(THEME_STYLE_ARGS))
+    if extra:
+        raise CommandError(f"set_theme_style does not take {extra}. Allowed: {list(THEME_STYLE_ARGS)}.")
+    if not args:
+        raise CommandError(f"set_theme_style needs at least one of {list(THEME_STYLE_ARGS)}.")
+    manifest = _theme_manifest(view)
+    theme_name = str(view.site_config().get("theme") or "")
+    theme: dict[tuple[str, ...], Any] = {}
+    shown: dict[str, Any] = {}
+
+    for arg, option_name in THEME_STYLE_OPTIONS.items():
+        if arg not in args:
+            continue
+        value = args[arg]
+        option = _theme_option(manifest, option_name)
+        if option is None:
+            raise CommandError(f"{arg}: the theme {theme_name!r} has no {option_name!r} option.")
+        kind = option.get("type")
+        if kind == "colorpicker":
+            if not isinstance(value, str) or not HEX_COLOR_RE.match(value):
+                raise CommandError(f"{arg} must be a colour like '#1b5fa8'; got {value!r}.")
+            value = value.lower()
+        elif kind in ("select", "radio"):
+            allowed = [str(o.get("value")) for o in option.get("options") or [] if isinstance(o, dict)]
+            if not isinstance(value, str) or value not in allowed:
+                raise CommandError(f"{arg}: {value!r} is not one of the theme's choices: {allowed}.")
+        else:
+            raise CommandError(f"{arg}: the theme's {option_name!r} is a {kind!r} option; not supported.")
+        theme[("customConfig", option_name)] = shown[arg] = value
+
+    if "footer_text" in args:
+        text = args["footer_text"]
+        if not isinstance(text, str) or not text.strip() or len(text) > 300:
+            raise CommandError("footer_text must be plain text, 1 to 300 characters.")
+        if _theme_option(manifest, "copyrightText") is None:
+            raise CommandError(f"footer_text: the theme {theme_name!r} has no 'copyrightText' option.")
+        theme[("customConfig", "copyrightText")] = f"<p>{html.escape(text.strip())}</p>"
+        shown["footer_text"] = text.strip()
+
+    css = None
+    if "menu_style" in args:
+        style = args["menu_style"]
+        if style not in MENU_STYLES:
+            raise CommandError(f"menu_style must be one of {list(MENU_STYLES)}.")
+        if style == "pro":
+            if theme_name != "simple":
+                raise CommandError(f"menu_style 'pro' is written for Publii's default theme 'simple'; "
+                                   f"this site uses {theme_name!r}.")
+            current = ((view.theme_config().get("customConfig") or {}).get("primaryColor")
+                       or (_theme_option(manifest, "primaryColor") or {}).get("value") or "")
+            primary = theme.get(("customConfig", "primaryColor"), current)
+            if isinstance(primary, str) and HEX_COLOR_RE.match(primary) and _contrast_with_white(primary) < 3:
+                raise CommandError(f"The primary colour {primary} is too light for the white text of the "
+                                   f"menu button (contrast {_contrast_with_white(primary):.1f}:1, at least 3:1 "
+                                   f"needed). Pass a darker primary_color.")
+        css = _with_menu_block(view.custom_css(), MENU_STYLE_CSS if style == "pro" else None)
+        shown["menu_style"] = style
+    return {"theme": theme, "css": css, "shown": shown}
+
+
+def _op_set_theme_style(repo: PubliiRepository, tx, args: dict) -> Any:
+    """Give the site a presentable default look. args, one or more of: primary_color ('#rrggbb'; links, the current menu entry and the menu button), primary_dark_color (the same in dark mode), color_scheme (one of the theme's choices, e.g. 'light' when the logo is dark), heading_font, body_font, menu_font (font names the theme offers, listed in the theme's config.json), footer_text (plain text in place of 'Powered by Publii'), menu_style ('pro': a line under the header, bolder entries underlined in the primary colour on hover and on the current page, the last entry as a button; written for Publii's default theme 'simple'; 'none' removes it). Theme options are checked against the active theme; the menu style goes between markers in input/config/custom-css.css and never touches the rest of that file."""
+    view = _ApplyView(repo, tx)
+    spec = _check_set_theme_style(view, args)
+    if spec["theme"]:
+        tx.set_config_values(THEME_CONFIG, spec["theme"])
+    if spec["css"] is not None:
+        tx.set_custom_css(spec["css"])
+    return {"updated": spec["shown"]}
+
+
 # -- add_media ---------------------------------------------------------------- #
 
 ADD_MEDIA_ARGS = {"file", "target", "slug", "id", "name", "featured", "alt"}
@@ -1071,6 +1219,7 @@ WRITE_OPS: dict[str, Callable] = {
     "update_menu_item": _op_update_menu_item,
     "update_site_settings": _op_update_site_settings,
     "set_s3_deployment": _op_set_s3_deployment,
+    "set_theme_style": _op_set_theme_style,
     "add_media": _op_add_media,
 }
 
@@ -1284,6 +1433,10 @@ def _describe_or_raise(repo: PubliiRepository, cmd: Command, view: _PlanView) ->
         spec = _check_update_site_settings(view, cmd.args)
         return "update site settings: " + ", ".join(
             f"{k} -> {v!r}" for k, v in spec["shown"].items())
+
+    if cmd.op == "set_theme_style":
+        spec = _check_set_theme_style(view, cmd.args)
+        return "set the site's look: " + ", ".join(f"{k} -> {v!r}" for k, v in spec["shown"].items())
 
     if cmd.op == "set_s3_deployment":
         spec = _check_set_s3_deployment(view, cmd.args)
