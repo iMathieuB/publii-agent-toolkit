@@ -7,7 +7,7 @@ description: Fait connaître un site neuf à Google et à Bing. Vérifie d'abord
 
 Un sitemap est la liste des pages d'un site, dans un fichier que les moteurs lisent. Publii le fabrique seul (`/sitemap.xml`) et le met à jour à chaque synchro. On le soumet **une fois** par adresse de sitemap ; Google et Bing le relisent ensuite d'eux-mêmes. À refaire seulement pour un nouveau site, un nouveau domaine, une nouvelle langue publiée sous un autre sitemap, ou une refonte qui change beaucoup d'adresses.
 
-Si l'agent peut piloter un navigateur (Claude dans Chrome, par exemple), il fait les clics. Sinon, il donne les étapes une à une et la personne clique.
+Si l'agent peut piloter un navigateur, il fait les clics : de préférence avec Claude in Chrome, qui pilote le Chrome de la personne, déjà connecté à Google et à Bing ; le navigateur intégré de l'application ne sert qu'à défaut. Sinon, il donne les étapes une à une et la personne clique.
 
 ## Les règles
 
