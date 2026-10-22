@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `formulaire-contact-cloudflare`: the person sends the test message, not the agent. In a rehearsal on 2026-10-21 the agent filled in and sent the form from the browser it drives, and Turnstile, whose job is to stop scripted browsers, stopped it; the person had to redo it by hand. The agent now opens the contact page, gives the steps in one message, and watches the address for `/merci/` without capturing the page.
+
 ## [1.3.5] — 2026-10-21
 
 ### Fixed

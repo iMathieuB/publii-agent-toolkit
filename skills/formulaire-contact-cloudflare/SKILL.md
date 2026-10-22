@@ -95,8 +95,10 @@ Le formulaire fonctionne sans JavaScript, sauf Turnstile : le script de Turnstil
 
 ## 5. L'essai
 
-1. Ouvrir `https://<domaine>/contact/`, remplir avec un nom et un courriel d'essai, cocher la case, envoyer.
-2. La page de remerciement s'affiche.
+L'essai, c'est la personne qui le fait. Ne remplissez pas et n'envoyez pas le formulaire vous-même, même si vous pilotez le navigateur : Turnstile est fait pour bloquer un navigateur piloté par un programme, et il bloque aussi le vôtre (constaté le 21 octobre 2026 : l'envoi par l'agent a échoué, la personne a dû le refaire à la main).
+
+1. Ouvrez vous-même `https://<domaine>/contact/` dans son navigateur, puis donnez-lui les consignes en une fois : un nom et un courriel d'essai, cocher la case, attendre que la vérification de Turnstile affiche son succès, envoyer.
+2. Surveillez l'onglet, sans capture d'écran : quand l'adresse passe à `/merci/`, l'envoi est accepté ; dites-le-lui.
 3. La personne confirme que le message est arrivé. Vous ne lisez pas sa boîte. Avec un domaine neuf, les premiers messages arrivent souvent dans les courriels indésirables (observé à l'essai du 20 octobre 2026) : dites-lui de regarder là, de marquer le message comme légitime et d'ajouter l'adresse d'envoi à ses contacts, sinon les inscriptions suivantes iront au même endroit.
 
 Si rien n'arrive : `npx wrangler tail` pendant un nouvel essai montre l'erreur. Les causes habituelles sont une adresse de destination non vérifiée, un expéditeur hors du domaine routé, ou un jeton Turnstile absent (script retiré de la page).
