@@ -7,6 +7,7 @@ All notable changes to this project are documented here. This project follows
 
 ### Changed
 
+- `site-publii-cloudflare` prefers Claude in Chrome, which drives the person's own Chrome with its sessions already open, over the app's built-in browser, which starts signed out of everything.
 - `formulaire-contact-cloudflare`: the person sends the test message, not the agent. In a rehearsal on 2026-10-21 the agent filled in and sent the form from the browser it drives, and Turnstile, whose job is to stop scripted browsers, stopped it; the person had to redo it by hand. The agent now opens the contact page, gives the steps in one message, and watches the address for `/merci/` without capturing the page.
 
 ## [1.3.5] — 2026-10-21
