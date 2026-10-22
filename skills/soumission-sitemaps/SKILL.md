@@ -13,7 +13,7 @@ Si l'agent peut piloter un navigateur, il fait les clics : de préférence avec 
 
 - **La personne se connecte elle-même** à Google et à Microsoft. L'agent ne choisit jamais un compte à sa place et ne voit jamais un mot de passe.
 - L'agent demande la permission avant d'ajouter un enregistrement DNS et avant toute soumission.
-- **L'import de Bing depuis Google Search Console** donne à Bing un accès aux données de la Search Console : c'est la voie la plus simple, mais elle demande l'accord explicite de la personne.
+- **Pour Bing, ajoutez le site à la main.** N'utilisez pas l'import depuis Google Search Console, même s'il paraît plus rapide : il échoue dès que le compte connecté à Bing n'est pas celui qui détient la propriété dans la Search Console, et on le découvre seulement à la fin (vécu au tournage du 21 octobre 2026). Il donne aussi à Bing un accès aux données de la Search Console. L'ajout manuel, avec la vérification par le DNS, a fonctionné du premier coup.
 
 ## 1. Vérifier le sitemap avant de le soumettre
 
@@ -37,10 +37,9 @@ Juste après l'envoi, un sitemap neuf affiche souvent « Impossible de récupér
 ## 3. Bing Webmaster Tools
 
 1. La personne ouvre bing.com/webmasters et se connecte (Microsoft, Google ou Facebook : c'est son choix).
-2. Deux voies :
-   - **Importer depuis Google Search Console**, avec l'accord de la personne (voir les règles) : Bing reprend le site vérifié et ses sitemaps.
-   - **Ajouter le site à la main** avec l'adresse `https://<domaine>/`, puis vérifier la propriété. Si Bing propose une vérification automatique avec le fournisseur du domaine, la personne peut l'accepter ; sinon, un enregistrement CNAME ou TXT dans le DNS, ajouté comme pour Google.
-3. Page des sitemaps : « Submit sitemap », l'adresse complète du sitemap.
+2. Si Bing propose d'importer les sites de Google Search Console, refusez et choisissez l'ajout manuel (voir les règles). Ajoutez le site avec l'adresse `https://<domaine>/`.
+3. Vérifiez la propriété. Si Bing propose une vérification automatique avec le fournisseur du domaine, la personne peut l'accepter ; sinon, l'agent ajoute l'enregistrement CNAME (ou TXT) que Bing donne dans la zone Cloudflare, avec la permission de la personne, comme pour Google, puis lance « Verify ». Ne retirez jamais cet enregistrement : Bing revérifie lui aussi.
+4. Page des sitemaps : « Submit sitemap », l'adresse complète du sitemap.
 
 ## 4. Consigner
 
