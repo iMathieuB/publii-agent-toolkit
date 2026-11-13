@@ -21,7 +21,26 @@ import pytest
 if sys.platform != "win32":
     pytest.skip("The desktop driver is Windows only.", allow_module_level=True)
 
+from types import SimpleNamespace  # noqa: E402
+
+import publii_toolkit.desktop as desktop  # noqa: E402
 from publii_toolkit.desktop import DesktopError, PubliiDesktop  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def unlocked_session_and_fake_patterns(monkeypatch):
+    """An unlocked session, and InvokePattern on every ClickableElement only.
+
+    The module actuates controls through UI Automation patterns, never with the
+    mouse; a ClickableElement records the Invoke in its `clicks` list.
+    """
+    monkeypatch.setattr(desktop, "session_locked", lambda: False)
+
+    def get_pattern(element, name):
+        if name == "Invoke" and hasattr(element, "clicks"):
+            return SimpleNamespace(Invoke=element.click_input)
+        return None
+    monkeypatch.setattr(desktop, "_get_pattern", get_pattern)
 
 
 def make_sites(root, projects: dict[str, str]):
@@ -34,7 +53,9 @@ def make_sites(root, projects: dict[str, str]):
                         "syncDate": 1700000000000}),
             encoding="utf-8",
         )
-    return PubliiDesktop(sites_root=root, executable=root / "Publii.exe")
+    driver = PubliiDesktop(sites_root=root, executable=root / "Publii.exe")
+    driver._launch_lock_state = False  # as if Publii had been launched unlocked
+    return driver
 
 
 BILINGUAL = {

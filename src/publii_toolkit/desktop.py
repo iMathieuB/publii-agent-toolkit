@@ -15,6 +15,21 @@ including the site switcher and the "Sync your website" link. That flag is what
 makes this module possible, and it is why the module always launches Publii
 itself instead of attaching to a window that may have started without it.
 
+No real mouse click is ever sent. Each control is actuated through its UI
+Automation pattern (InvokePattern, or LegacyIAccessible's default action when a
+control has no InvokePattern), which does not need Publii in the foreground.
+That is what lets a sync run while the Windows session is locked: real clicks
+stop there, because the lock screen (LockApp.exe) keeps the foreground. Tests
+on 2026-11-12 showed that a Publii launched while the session is locked
+answers these patterns, but a Publii launched unlocked and then caught by a
+lock accepts them and does nothing: Chromium puts its window to sleep. So the
+module records the lock state when it launches Publii, re-reads it before
+every action, and relaunches Publii when it has changed.
+
+The lock state is read through WTS (``WTSQuerySessionInformationW``,
+``WTSSessionInfoEx``, ``SessionFlags``). The input desktop's name does not
+work: on Windows 11 the lock screen runs on the user's "Default" desktop.
+
 Success is never inferred from the click. Publii writes ``syncDate`` into
 ``input/config/site.config.json`` when a sync completes, so this module reads
 that value before and after and only reports success when it changes.
@@ -46,7 +61,11 @@ this toolkit protect ``input/``; they do not undo a publication. Hence:
 - it refuses to click any element whose label contains "delete": the site list
   places a "Delete website" link beside every entry;
 - it re-reads the selected site name and compares it to the requested one
-  immediately before clicking sync.
+  immediately before confirming the sync, with the modal's title present in
+  the same reading: a UI Automation pattern acts on an element even when
+  something covers it on screen;
+- it sends nothing to a Publii instance whose session was locked or unlocked
+  since launch, and raises before launching when the lock state cannot be read.
 
 Requires the optional ``desktop`` extra::
 
@@ -80,6 +99,11 @@ SITE_HEADER_TYPES = ("Text", "Button")
 SYNC_CONFIRM_TYPES = ("Text", "Button")
 # What closes the success modal: "OK", then "Close" beside "Visit your website".
 MODAL_ACK_TEXTS = ("OK", "Close")
+# The site list closes with this button (Publii 0.48.1, seen 2026-11-12).
+SITE_LIST_BACK_TEXT = "Go back"
+OTHER_OPTIONS_PREFIX = "other options"
+# Publii relaunches allowed in one run after the session changed state.
+MAX_RELAUNCHES = 2
 
 TREE_READY_MIN_ELEMENTS = 40
 TREE_TIMEOUT_S = 60
@@ -95,6 +119,61 @@ DEFAULT_EXECUTABLES = (
 
 class DesktopError(RuntimeError):
     """The desktop application could not be driven to a verified outcome."""
+
+
+class SessionChanged(DesktopError):
+    """The Windows session was locked or unlocked after Publii was launched."""
+
+
+def session_locked() -> bool | None:
+    """True when the Windows session is locked, False when unlocked, None if unknown.
+
+    WTS ``SessionFlags`` is 0 (WTS_SESSIONSTATE_LOCK) when locked and 1 when
+    unlocked, checked in both states on Windows 11 on 2026-11-12.
+    """
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class Level1(ctypes.Structure):
+        _fields_ = [("SessionId", wintypes.ULONG), ("SessionState", ctypes.c_int),
+                    ("SessionFlags", wintypes.LONG)]
+
+    class InfoEx(ctypes.Structure):
+        _fields_ = [("Level", wintypes.DWORD), ("_pad", wintypes.DWORD), ("Data", Level1)]
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32")
+        wtsapi32 = ctypes.WinDLL("wtsapi32")
+        wtsapi32.WTSQuerySessionInformationW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.DWORD)]
+        wtsapi32.WTSFreeMemory.argtypes = [ctypes.c_void_p]
+        session_id = wintypes.DWORD()
+        if not kernel32.ProcessIdToSessionId(kernel32.GetCurrentProcessId(), ctypes.byref(session_id)):
+            return None
+        buffer, size = ctypes.c_void_p(), wintypes.DWORD()
+        if not wtsapi32.WTSQuerySessionInformationW(None, session_id.value, 25,  # WTSSessionInfoEx
+                                                    ctypes.byref(buffer), ctypes.byref(size)):
+            return None
+        try:
+            info = ctypes.cast(buffer, ctypes.POINTER(InfoEx)).contents
+            flags = info.Data.SessionFlags if info.Level == 1 else None
+        finally:
+            wtsapi32.WTSFreeMemory(buffer)
+    except (OSError, AttributeError, ValueError):
+        return None
+    return {0: True, 1: False}.get(flags)
+
+
+def _get_pattern(element, name: str):
+    """The UI Automation pattern interface of `element`, or None if it has none."""
+    from pywinauto.uia_defines import NoPatternInterfaceError, get_elem_interface
+    try:
+        return get_elem_interface(element.element_info.element, name)
+    except NoPatternInterfaceError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -151,6 +230,7 @@ class PubliiDesktop:
             raise DesktopError(f"Sites directory not found: {self.sites_root}")
         self._executable = Path(executable) if executable else None
         self._window = None
+        self._launch_lock_state: bool | None = None
 
     # ── Disk, the source of truth ─────────────────────────────────
 
@@ -242,10 +322,18 @@ class PubliiDesktop:
         from pywinauto import Desktop
 
         deadline = time.time() + timeout_s
+        import csv
+
         while time.time() < deadline:
+            processes = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq Publii.exe", "/FO", "CSV", "/NH"],
+                capture_output=True, text=True, check=False,
+            )
+            allowed_pids = {int(row[1]) for row in csv.reader((processes.stdout or "").splitlines())
+                            if len(row) > 1 and row[0].lower() == "publii.exe" and row[1].isdigit()}
             for window in Desktop(backend="uia").windows():
                 try:
-                    if "publii" in (window.window_text() or "").lower():
+                    if window.process_id() in allowed_pids and (window.window_text() or "").strip().lower() == "publii":
                         return window
                 except Exception:
                     continue
@@ -253,14 +341,26 @@ class PubliiDesktop:
         raise DesktopError("The Publii window never appeared.")
 
     def _wait_for_tree(self, window, timeout_s: int = TREE_TIMEOUT_S) -> None:
+        # No set_focus(): the tree reads without focus (checked 2026-11-12, locked
+        # and unlocked), and a locked session refuses the foreground anyway.
         deadline = time.time() + timeout_s
         count = 0
         while time.time() < deadline:
             try:
-                count = len(window.descendants())
+                children = window.descendants()
+                count = len(children)
             except Exception:
+                children = []
                 count = 0
-            if count >= TREE_READY_MIN_ELEMENTS:
+            # A new 0.48.1 site has a usable 38-element sidebar. A count-only
+            # threshold incorrectly describes it as an empty accessibility tree.
+            named_controls = {(getattr(e.element_info, "control_type", ""), self._text(e))
+                              for e in children}
+            sidebar_ready = (("Hyperlink", SYNC_LINK_TEXT) in named_controls
+                             and ("Hyperlink", "Pages") in named_controls
+                             and (("Button", "Preview site") in named_controls
+                                  or ("Button", "Preview your changes") in named_controls))
+            if sidebar_ready or count >= TREE_READY_MIN_ELEMENTS:
                 return
             time.sleep(2)
         raise DesktopError(
@@ -300,48 +400,80 @@ class PubliiDesktop:
         matches = cls._find_all(children, text, control_types, exact)
         return matches[0] if matches else None
 
-    @classmethod
-    def _safe_click(cls, element, expected_text: str) -> None:
-        actual = cls._text(element)
+    def _check_session(self) -> None:
+        """Refuse any action in an instance whose session changed state since launch."""
+        now = session_locked()
+        if now is None or now != self._launch_lock_state:
+            raise SessionChanged(
+                f"Windows session {'locked' if self._launch_lock_state else 'unlocked'} "
+                f"when Publii was launched, "
+                f"{'unknown' if now is None else ('locked' if now else 'unlocked')} now"
+            )
+
+    def _safe_invoke(self, element, expected_text: str) -> str:
+        """Actuate a control through UI Automation, never with the mouse.
+
+        Refuses destructive or unexpected elements, and any action in an
+        instance caught by a lock change. InvokePattern first; LegacyIAccessible's
+        default action only when the control has no InvokePattern (the Text
+        header of Publii 0.47.6). If InvokePattern exists and fails, stop:
+        retrying another way could actuate twice.
+        """
+        actual = self._text(element)
         lowered = actual.lower()
         for forbidden in FORBIDDEN_CLICK_TEXTS:
             if forbidden in lowered:
-                raise DesktopError(f"Refused to click a destructive element: {actual!r}")
+                raise DesktopError(f"Refused to actuate a destructive element: {actual!r}")
         if expected_text.lower() not in lowered:
-            raise DesktopError(f"Refused to click: expected {expected_text!r}, found {actual!r}")
-        top = getattr(element, "top_level_parent", None)
-        if top is not None:
-            cls._ensure_foreground(top())
-        element.click_input()
+            raise DesktopError(f"Refused to actuate: expected {expected_text!r}, found {actual!r}")
+        self._check_session()
+        for pattern, action in (("Invoke", lambda i: i.Invoke()),
+                                ("LegacyIAccessible", lambda i: i.DoDefaultAction())):
+            iface = _get_pattern(element, pattern)
+            if iface is None:
+                continue
+            try:
+                action(iface)
+            except Exception as exc:
+                raise DesktopError(f"{pattern} failed on {actual!r}: {exc}") from exc
+            return pattern
+        raise DesktopError(f"No UI Automation pattern on {actual!r}: nothing was actuated.")
 
-    @staticmethod
-    def _ensure_foreground(window) -> None:
-        """Bring Publii to the front, and check it, before any real mouse click.
+    def _longer_names(self, display_name: str) -> list[str]:
+        """Other projects whose name starts with `display_name` ("Acme EN")."""
+        return [o for o in self.display_names()
+                if o != display_name and o.startswith(display_name)]
 
-        click_input() is a real Windows click: it lands on whatever window is in
-        front, not on the one targeted. Windows sometimes refuses set_focus()
-        silently (foreground lock). Seen on 2026-10-22: Publii opened behind the
-        terminal, the click on the site header never opened the site list, and
-        the sync failed twice with "absent from the site list". Fallback:
-        minimize then restore, which Windows accepts. If Publii is still not in
-        front, do not click.
+    def _entry_button(self, entry, display_name: str, longer=()):
+        """The actionable Button of a site-list entry, or None.
+
+        An entry (ListItem) only has LegacyIAccessible; its Button child is
+        named after the site, followed by a space and its description when it
+        has one. Never "Other options: <site>", which opens the menu holding
+        "Delete website". The entry of the site already open has no such
+        Button: that is what marks it as active.
         """
-        if sys.platform != "win32" or not hasattr(window, "handle"):
-            return
-        import ctypes
-        user32 = ctypes.windll.user32
-        for attempt in range(3):
-            if attempt:
-                window.minimize()
-                time.sleep(0.8)
-                window.restore()
-                time.sleep(0.8)
-            window.set_focus()
-            time.sleep(0.5)
-            if user32.GetForegroundWindow() == window.handle:
-                return
-        raise DesktopError("Publii refuses to come to the foreground: click cancelled. "
-                           "Keep the Publii window visible and retry.")
+        try:
+            buttons = entry.descendants(control_type="Button")
+        except Exception:
+            return None
+        for button in buttons:
+            text = self._text(button)
+            if text.lower().startswith(OTHER_OPTIONS_PREFIX):
+                continue
+            if any(text.startswith(o) for o in longer):
+                continue
+            if text == display_name or text.startswith(display_name + " "):
+                return button
+        return None
+
+    def _close_site_list(self, window) -> None:
+        back = self._find(window.descendants(), SITE_LIST_BACK_TEXT,
+                          control_types=("Button",), exact=True)
+        if back is None:
+            raise DesktopError(f"{SITE_LIST_BACK_TEXT!r} button not found: the site list stays open.")
+        self._safe_invoke(back, SITE_LIST_BACK_TEXT)
+        time.sleep(2)
 
     def _current_site_display(self, window) -> str | None:
         known = set(self.display_names())
@@ -365,7 +497,6 @@ class PubliiDesktop:
         to be reopened and the requested position clicked even when the header
         already shows that name.
         """
-        window.set_focus()
         time.sleep(1)
 
         current = self._current_site_display(window)
@@ -375,8 +506,7 @@ class PubliiDesktop:
             header = self._find(window.descendants(), current, control_types=SITE_HEADER_TYPES, exact=True)
             if header is None:
                 raise DesktopError(f"Header for site {current!r} not found.")
-            self._ensure_foreground(window)
-            header.click_input()
+            self._safe_invoke(header, current)
         # current is None when no site is open: Publii starts on the last site
         # opened, read from its own localStorage (src/components/App.vue), and
         # on its site list when there is none, as after a fresh install whose
@@ -398,7 +528,14 @@ class PubliiDesktop:
                 f"clicking at random would publish the wrong project."
             )
 
-        self._safe_click(entries[occurrence], display_name)
+        button = self._entry_button(entries[occurrence], display_name,
+                                    self._longer_names(display_name))
+        if button is None:
+            if current == display_name:
+                self._close_site_list(window)  # the active entry: already open
+                return
+            raise DesktopError(f"The {display_name!r} list entry has no actionable button.")
+        self._safe_invoke(button, display_name)
         time.sleep(4)
 
         if self._current_site_display(window) != display_name:
@@ -413,33 +550,43 @@ class PubliiDesktop:
         not a candidate.
         """
         others = set(self.display_names()) - {display_name}
+        # An entry's text is the display name followed directly by the site
+        # description ("Acme ENWebsite for..."), so another project is recognised
+        # by its longer name being a prefix of the text, not by equality.
+        longer = [o for o in others if o.startswith(display_name) and len(o) > len(display_name)]
+
+        def is_other(text: str) -> bool:
+            return text in others or any(text.startswith(o) for o in longer)
+
         entries: list = []
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             time.sleep(1.5)
             entries = [e for e in self._find_all(window.descendants(), display_name,
                                                  control_types=("ListItem",))
-                       if self._text(e) not in others]
+                       if not is_other(self._text(e))]
             if entries:
                 break
         return entries
 
-    def _click_sync(self, window) -> None:
+    def _click_sync(self, window, display_name: str | None = None) -> None:
         """The sidebar link opens a modal; the modal's button starts the sync.
 
         Both carry the exact same label. Only the control type separates them:
-        Hyperlink in the sidebar, Text in the modal. Clicking the sidebar twice
-        reopens the modal and publishes nothing, while looking like a click that
-        worked.
+        Hyperlink in the sidebar, Text or Button in the modal. Actuating the
+        sidebar twice reopens the modal and publishes nothing, while looking
+        like it worked. A pattern also acts on an element hidden behind
+        another one, so the confirmation is only actuated with the modal's
+        title in the same reading and, when `display_name` is given, after the
+        open site has been read again.
         """
-        window.set_focus()
         time.sleep(1)
 
         link = self._find(window.descendants(), SYNC_LINK_TEXT,
                           control_types=("Hyperlink",), exact=True)
         if link is None:
             raise DesktopError(f"Sidebar link {SYNC_LINK_TEXT!r} not found.")
-        self._safe_click(link, SYNC_LINK_TEXT)
+        self._safe_invoke(link, SYNC_LINK_TEXT)
 
         deadline = time.time() + MODAL_TIMEOUT_S
         title_seen = False
@@ -451,7 +598,14 @@ class PubliiDesktop:
             title_seen = True
             confirm = self._find(children, SYNC_LINK_TEXT, control_types=SYNC_CONFIRM_TYPES, exact=True)
             if confirm is not None:
-                self._safe_click(confirm, SYNC_LINK_TEXT)
+                if display_name is not None:
+                    shown = self._current_site_display(window)
+                    if shown != display_name:
+                        raise DesktopError(
+                            f"{shown!r} is open instead of {display_name!r} at confirmation "
+                            f"time. Nothing was published."
+                        )
+                self._safe_invoke(confirm, SYNC_LINK_TEXT)
                 return
         if title_seen:
             raise DesktopError(
@@ -487,7 +641,7 @@ class PubliiDesktop:
                 covered = self._find(children, SYNC_LINK_TEXT,
                                      control_types=("Hyperlink",), exact=True) is None
                 if known or covered:
-                    self._safe_click(ack, label)
+                    self._safe_invoke(ack, label)
                     time.sleep(2)
                     return True
             time.sleep(1.5)
@@ -588,8 +742,10 @@ class PubliiDesktop:
         while remaining and attempts < 2 * total:
             self._select_site(window, display_name, occurrence=occurrence,
                               expected_matches=total)
-            self._click_sync(window)
+            self._click_sync(window, display_name)
             moved, new = self._wait_for_any_sync(directories, before)
+            if moved is None:
+                self._check_session()  # a sync stalled by a lock is redone after a relaunch
             self._dismiss_sync_modal(window)
             attempts += 1
             occurrence = (occurrence + 1) % total
@@ -633,35 +789,70 @@ class PubliiDesktop:
                 f"{ACCESSIBILITY_FLAG}, otherwise no control is addressable."
             )
 
+        if session_locked() is None:
+            raise DesktopError("The Windows session's lock state cannot be read: "
+                               "Publii was not launched and nothing was published.")
+
         results = []
         try:
             # Launch and tree wait sit inside the try: if Publii starts but never
             # exposes its controls, it must still be closed, or the database stays
             # locked and the next run refuses to start.
-            self.launch()
-            window = self._find_window()
-            self._wait_for_tree(window)
-
+            window = self._start()
+            relaunches = 0
             for display_name, directories in grouped:
-                if len(directories) > 1:
-                    results.extend(self._sync_group(window, display_name, directories))
-                    continue
-
-                directory = directories[0]
-                previous = self.state(directory).sync_date_ms
-                self._select_site(window, display_name)
-                self._click_sync(window)
-                new = self._wait_for_sync(directory, previous)
-                self._dismiss_sync_modal(window)
-                results.append(SyncResult(
-                    site=directory,
-                    applied=True,
-                    succeeded=new is not None,
-                    previous_sync_ms=previous,
-                    new_sync_ms=new,
-                    detail="" if new else f"syncDate unchanged after {SYNC_TIMEOUT_S}s",
-                ))
+                while True:
+                    try:
+                        if len(directories) > 1:
+                            results.extend(self._sync_group(window, display_name, directories))
+                        else:
+                            results.append(self._sync_one(window, display_name, directories[0]))
+                        break
+                    except SessionChanged:
+                        # Nothing was sent to the stale instance: close it and redo
+                        # this site in a fresh one.
+                        relaunches += 1
+                        if relaunches > MAX_RELAUNCHES:
+                            raise
+                        self.close()
+                        time.sleep(3)
+                        window = self._start()
         finally:
             if not keep_open:
                 self.close()
         return results
+
+    def _start(self):
+        """Launch Publii, record the session's lock state, wait for the interface."""
+        state = session_locked()
+        if state is None:
+            raise DesktopError("The Windows session's lock state cannot be read at launch.")
+        self._launch_lock_state = state
+        self.launch()
+        window = self._find_window()
+        self._wait_for_tree(window)
+        return window
+
+    def _sync_one(self, window, display_name: str, directory: str) -> SyncResult:
+        previous = self.state(directory).sync_date_ms
+        self._select_site(window, display_name)
+        self._click_sync(window, display_name)
+        new = self._wait_for_sync(directory, previous)
+        if new is None:
+            self._check_session()  # a sync stalled by a lock is redone after a relaunch
+            self._dismiss_sync_modal(window)
+        else:
+            try:
+                self._dismiss_sync_modal(window)
+            except SessionChanged:
+                # Published and verified on disk; only the modal stays open. The
+                # next site sees the change and relaunches Publii.
+                pass
+        return SyncResult(
+            site=directory,
+            applied=True,
+            succeeded=new is not None,
+            previous_sync_ms=previous,
+            new_sync_ms=new,
+            detail="" if new else f"syncDate unchanged after {SYNC_TIMEOUT_S}s",
+        )

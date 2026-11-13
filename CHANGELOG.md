@@ -3,11 +3,24 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.4.0] — 2026-11-12
+
+### Changed
+
+- **`desktop-sync` sends no real mouse click any more, so it also works while the Windows session is locked.** Every control is actuated through its UI Automation pattern: InvokePattern, or LegacyIAccessible's default action for a control without one (the Text header of Publii 0.47.6). Neither needs Publii in the foreground. Real clicks stopped on a locked session, where the lock screen (LockApp.exe) keeps the foreground (seen on 2026-11-12 at 2:01 a.m.). This replaces the foreground check added after 1.3.6, and removes the `set_focus()` calls. Verified on 2026-11-12 with a real sync of two sites while the session was locked: both `syncDate` values moved and the pages went live.
+- A site-list entry is selected through its Button child, never through "Other options: <site>", which opens the menu holding "Delete website". The entry of the site already open has no such Button; it is recognised as active and the list is closed with "Go back".
+- The modal's confirmation is actuated only with the modal's title present in the same reading of the tree and after the open site has been read again: a pattern acts on an element even when something covers it on screen.
+
+### Added
+
+- `session_locked()` reads the lock state through WTS (`WTSSessionInfoEx`, `SessionFlags`). The input desktop's name is not used: on Windows 11 the lock screen runs on the user's "Default" desktop, so that test answers "unlocked" during a lock.
+- `SessionChanged`: a Publii launched unlocked and then caught by a lock accepts Invoke and does nothing (Chromium puts the window to sleep), while one launched during the lock works. The driver records the lock state at launch, checks it before every action, and relaunches Publii, at most twice per run, when it has changed. `sync(apply=True)` raises `DesktopError` before launching Publii when the state cannot be read.
 
 ### Fixed
 
-- `desktop-sync` checks that Publii is really in the foreground before every real mouse click, with a minimize-and-restore fallback, and refuses to click otherwise. Windows sometimes ignores `set_focus()` without an error; the click then landed on the window in front, the site list never opened, and the sync failed with "absent from the site list" (seen twice on 2026-10-22).
+- The Publii window is matched by process id and exact title, so a terminal whose title contains "Publii" is never taken for it.
+- A fresh Publii 0.48.1 site with fewer than 40 accessibility elements but a usable sidebar is recognised as ready.
+- An entry whose text starts with a longer display name ("Acme EN" followed by its description) is no longer taken for "Acme".
 
 ## [1.3.6] — 2026-10-22
 
